@@ -8,15 +8,37 @@
 //! (Go / Python / TypeScript / Java). It is wire-compatible with the DBOS system-database
 //! schema, so the same database can be inspected by DBOS tooling.
 //!
-//! The crate is being built milestone by milestone (see `ROADMAP.md`). Currently implemented:
-//! - [`error`] — the DBOS error taxonomy (codes match the reference SDKs).
-//! - [`config`] — configuration, dialect detection, credential masking.
-//! - [`serialize`] — payload serialization (`portable_json` default + `DBOS_JSON` reader).
+//! ```no_run
+//! use dbos::{Config, Dbos, WorkflowContext, WorkflowOptions, StepOptions};
+//!
+//! async fn my_workflow(ctx: WorkflowContext, name: String) -> dbos::Result<String> {
+//!     let greeting = ctx.run_step("greet", |_| async move { Ok(format!("hello {name}")) }).await?;
+//!     Ok(greeting)
+//! }
+//!
+//! # async fn run() -> dbos::Result<()> {
+//! let dbos = Dbos::builder(Config::new("myapp", "postgres://localhost/dbos"))
+//!     .register_workflow("my_workflow", my_workflow)
+//!     .launch()
+//!     .await?;
+//! let handle = dbos.run_workflow::<_, String>("my_workflow", "world".to_string(), WorkflowOptions::default()).await?;
+//! let result = handle.get_result().await?;
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod runtime;
 pub mod serialize;
 
 pub use config::{Config, Dialect};
 pub use error::{DbosError, DbosErrorCode, Result};
+pub use runtime::{
+    Dbos, DbosBuilder, StepOptions, WorkflowContext, WorkflowHandle, WorkflowOptions,
+    WorkflowStatusType,
+};
+
+/// A boxed, `Send` future — the return type of type-erased workflow handlers.
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

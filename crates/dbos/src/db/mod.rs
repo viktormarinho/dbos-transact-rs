@@ -1,7 +1,9 @@
-//! The DBOS system database: connection, schema migrations, and (in later milestones) all the
-//! workflow/step/queue/notification SQL operations.
+//! The DBOS system database: connection, schema migrations, and all the workflow / step /
+//! queue / notification SQL operations.
 
 pub mod migrate;
+pub mod status;
+pub mod steps;
 
 pub use migrate::{run_migrations, should_migrate, SCHEMA_VERSION};
 
@@ -19,6 +21,23 @@ pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool>
     Ok(pool)
 }
 
+/// Quote an identifier like pgx `Identifier.Sanitize`: wrap in double quotes, doubling any
+/// embedded double quote.
+pub(crate) fn sanitize_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// The `"<schema>".` prefix used in front of every system-table name (Go `SchemaPrefix`).
+pub(crate) fn schema_prefix(schema: &str) -> String {
+    format!("{}.", sanitize_ident(schema))
+}
+
+/// Current wall-clock time as epoch milliseconds (the unit of every `*_epoch_ms`/`created_at`
+/// column).
+pub(crate) fn now_epoch_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 #[cfg(test)]
 pub(crate) mod testutil {
     use sqlx::postgres::PgPoolOptions;
@@ -34,7 +53,7 @@ pub(crate) mod testutil {
 
     pub async fn connect() -> PgPool {
         PgPoolOptions::new()
-            .max_connections(3)
+            .max_connections(5)
             .connect(&test_database_url())
             .await
             .expect("connect to the test Postgres (is the docker container running?)")

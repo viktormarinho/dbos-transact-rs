@@ -15,6 +15,7 @@
 
 use sqlx::PgPool;
 
+use super::sanitize_ident;
 use crate::error::Result;
 
 /// The schema version produced by applying all embedded migrations.
@@ -27,12 +28,6 @@ struct Migration {
     sql: String,
     /// Runs `CONCURRENTLY` index DDL; must execute in autocommit (no transaction).
     online: bool,
-}
-
-/// Quote an identifier like pgx `Identifier.Sanitize`: wrap in double quotes, doubling any
-/// embedded double quote.
-fn sanitize_ident(ident: &str) -> String {
-    format!("\"{}\"", ident.replace('"', "\"\""))
 }
 
 /// Render a migration template using Go `fmt.Sprintf` semantics for the subset we use:

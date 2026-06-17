@@ -1,0 +1,42 @@
+[package]
+name = "dbos"
+description = "Durable, crash-resilient workflow execution backed by Postgres (DBOS Transact for Rust)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Async runtime (used from M1 onward: migration runner, pools, background tasks).
+tokio = { version = "1", features = ["full"] }
+# Postgres access. Pin 0.8.x for sqlx::raw_sql (multi-statement migrations) + PgListener.
+# Runtime queries only (no compile-time `query!` macros) so no DATABASE_URL is needed to build.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "json",
+    "uuid",
+    "chrono",
+] }
+# Serialization: serde_json::Value is the universal persistence boundary.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Timestamps (epoch-ms math, RFC3339 portable dates, scheduled-tick ids).
+chrono = { version = "0.4", features = ["serde"] }
+# DBOS_JSON native format = base64(serde_json).
+base64 = "0.22"
+# application_version = sha256(current_exe) -> lowercase hex.
+sha2 = "0.10"
+hex = "0.4"
+# Password masking in key=value DSNs.
+regex = "1"
+# Structured logging (workflow/step/queue/recovery spans, listener reconnects).
+tracing = "0.1"
+
+[dev-dependencies]
+pretty_assertions = "1"
+tokio = { version = "1", features = ["full", "test-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

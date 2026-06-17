@@ -1,0 +1,5 @@
+/target
+**/target
+.DS_Store
+# Reference clones & cross-agent scratch (Conductor also gitignores .context).
+.context/

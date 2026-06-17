@@ -1,0 +1,16 @@
+# DBOS Transact for Rust — Cargo workspace.
+# The publishable crate is `dbos` (crates/dbos). Future members: dbos-macros, dbos-cli.
+[workspace]
+resolver = "2"
+members = ["crates/dbos"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["DBOS Transact Rust contributors"]
+repository = "https://github.com/viktormarinho/dbos-transact-rs"
+
+[profile.release]
+opt-level = 3

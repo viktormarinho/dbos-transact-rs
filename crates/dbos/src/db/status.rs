@@ -10,7 +10,8 @@ use super::{now_epoch_ms, schema_prefix};
 use crate::error::{DbosError, Result};
 
 /// `RETURNING` columns of [`insert_workflow_status`]: (recovery_attempts, status, name, queue_name,
-/// queue_partition_key, workflow_timeout_ms, workflow_deadline_epoch_ms, owner_xid).
+/// queue_partition_key, workflow_timeout_ms, workflow_deadline_epoch_ms, owner_xid). `owner_xid` is
+/// nullable (older/foreign rows may not set it).
 type InsertReturningRow = (
     i64,
     String,
@@ -19,7 +20,7 @@ type InsertReturningRow = (
     Option<String>,
     Option<i64>,
     Option<i64>,
-    String,
+    Option<String>,
 );
 
 /// A row polled by [`await_workflow_result`]: (status, output, error, recovery_attempts, serialization).
@@ -116,7 +117,7 @@ pub struct InsertResult {
     pub status: String,
     pub name: String,
     pub queue_name: Option<String>,
-    pub owner_xid: String,
+    pub owner_xid: Option<String>,
     /// True if this insert tripped the dead-letter threshold and moved the row to
     /// `MAX_RECOVERY_ATTEMPTS_EXCEEDED` (the caller should commit and surface a DLQ error).
     pub dlq_triggered: bool,
@@ -331,6 +332,47 @@ pub async fn await_workflow_result(
             }
         }
     }
+}
+
+/// A workflow eligible for crash recovery (its row plus the bits needed to re-run it).
+#[derive(Debug, sqlx::FromRow)]
+pub struct RecoverableWorkflow {
+    #[sqlx(rename = "workflow_uuid")]
+    pub id: String,
+    pub name: String,
+    pub inputs: Option<String>,
+    pub serialization: Option<String>,
+    pub queue_name: Option<String>,
+    pub authenticated_user: Option<String>,
+    pub assumed_role: Option<String>,
+    pub authenticated_roles: Option<String>,
+    pub config_name: Option<String>,
+}
+
+/// List `PENDING` workflows owned by any of `executor_ids` at the given `application_version` — the
+/// set a freshly-launched executor recovers. Mirrors Go `recoverPendingWorkflows`' list query.
+pub async fn list_pending_for_recovery(
+    pool: &PgPool,
+    schema: &str,
+    executor_ids: &[String],
+    application_version: &str,
+) -> Result<Vec<RecoverableWorkflow>> {
+    let prefix = schema_prefix(schema);
+    let sql = format!(
+        "SELECT workflow_uuid, name, inputs, serialization, queue_name,
+                authenticated_user, assumed_role, authenticated_roles, config_name
+         FROM {prefix}workflow_status
+         WHERE status = $1 AND executor_id = ANY($2) AND application_version = $3"
+    );
+    let rows = sqlx::query_as::<_, RecoverableWorkflow>(&sql)
+        .bind(WorkflowStatusType::Pending.as_str())
+        // Bind an owned Vec, not the `&[String]` slice: sqlx encodes the slice differently and it
+        // fails to match the `text[]` array parameter.
+        .bind(executor_ids.to_vec())
+        .bind(application_version)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
 }
 
 /// Read a workflow's current status string, if the row exists.

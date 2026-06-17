@@ -120,12 +120,15 @@ impl<R: DeserializeOwned> WorkflowHandle<R> {
 /// Insert the workflow status, decide idempotency, and (unless skipped) spawn the body — recording
 /// its outcome when it finishes. Returns an owned handle if this call runs the body, else a polling
 /// handle. Handles both top-level (`parent == None`) and child workflows.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn start_workflow<R>(
     inner: Arc<DbosInner>,
     name: &str,
     encoded_input: Option<String>,
     opts: WorkflowOptions,
     parent: Option<(Arc<WorkflowState>, i32)>,
+    fmt: Format,
+    is_recovery: bool,
 ) -> Result<WorkflowHandle<R>> {
     let (handler, max_retries, class_name, config_name) = {
         let entry = inner
@@ -148,7 +151,6 @@ pub(crate) async fn start_workflow<R>(
         uuid::Uuid::new_v4().to_string()
     };
 
-    let fmt = Format::Portable;
     let now = now_epoch_ms();
     let owner_xid = uuid::Uuid::new_v4().to_string();
     let app_version = opts
@@ -181,7 +183,8 @@ pub(crate) async fn start_workflow<R>(
         } else {
             serde_json::to_string(&auth.roles).ok()
         },
-        increment: 0,
+        // On recovery, bump recovery_attempts via the ON CONFLICT path; a fresh run does not.
+        increment: if is_recovery { 1 } else { 0 },
         ..Default::default()
     };
 
@@ -203,10 +206,11 @@ pub(crate) async fn start_workflow<R>(
         .await?;
     }
 
-    // Idempotency: don't re-run a workflow that is already terminal or owned by another executor.
+    // Idempotency: don't re-run a workflow that is already terminal, or (unless we are recovering)
+    // one that another executor owns.
     let should_skip = res.status == WorkflowStatusType::Success.as_str()
         || res.status == WorkflowStatusType::Error.as_str()
-        || res.owner_xid != owner_xid;
+        || (!is_recovery && res.owner_xid.as_deref() != Some(owner_xid.as_str()));
     tx.commit().await?;
 
     if should_skip {

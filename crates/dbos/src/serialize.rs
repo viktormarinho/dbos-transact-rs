@@ -47,6 +47,15 @@ impl Format {
             Format::DbosJson => DBOS_JSON_NAME,
         }
     }
+
+    /// The writable format matching a stored `serialization` name. Unknown/`None` falls back to the
+    /// crate default (`portable_json`); only `DBOS_JSON` maps to the base64 format.
+    pub fn from_name(name: Option<&str>) -> Format {
+        match name {
+            Some(DBOS_JSON_NAME) => Format::DbosJson,
+            _ => Format::Portable,
+        }
+    }
 }
 
 // ---- single-value encode/decode (outputs, step outputs, messages, events) ---------------------

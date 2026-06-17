@@ -1,6 +1,7 @@
 //! The DBOS runtime: building, launching, and running durable workflows.
 
 mod context;
+mod recovery;
 mod registry;
 mod step;
 mod workflow;
@@ -21,6 +22,7 @@ use crate::error::{DbosError, Result};
 use crate::serialize::{decode_input, encode_input, encode_value, Format};
 use crate::BoxFuture;
 
+use recovery::recover_pending_workflows;
 use registry::{ErasedWorkflow, Registry, RegistryEntry};
 use workflow::start_workflow;
 
@@ -32,6 +34,22 @@ pub use crate::db::status::WorkflowStatusType;
 
 /// The default per-workflow recovery limit (`_DEFAULT_MAX_RECOVERY_ATTEMPTS`).
 const DEFAULT_MAX_RECOVERY_ATTEMPTS: i64 = 100;
+
+/// Registration-time options for a workflow.
+#[derive(Debug, Clone)]
+pub struct RegistrationOptions {
+    /// Maximum number of recovery attempts before the workflow is moved to the dead-letter queue.
+    /// `-1` means unlimited. Defaults to 100.
+    pub max_retries: i64,
+}
+
+impl Default for RegistrationOptions {
+    fn default() -> Self {
+        RegistrationOptions {
+            max_retries: DEFAULT_MAX_RECOVERY_ATTEMPTS,
+        }
+    }
+}
 
 /// Options for starting a workflow.
 #[derive(Debug, Default, Clone)]
@@ -81,12 +99,28 @@ impl Dbos {
         P: Serialize + Send,
     {
         let encoded = encode_input(&input, Format::Portable)?;
-        start_workflow::<R>(self.inner.clone(), name, Some(encoded), opts, None).await
+        start_workflow::<R>(
+            self.inner.clone(),
+            name,
+            Some(encoded),
+            opts,
+            None,
+            Format::Portable,
+            false,
+        )
+        .await
     }
 
     /// Get a polling handle to an existing workflow by id.
     pub fn retrieve_workflow<R>(&self, workflow_id: &str) -> WorkflowHandle<R> {
         WorkflowHandle::polling(workflow_id.to_string(), self.inner.clone())
+    }
+
+    /// Re-run this executor's `PENDING` workflows (also run automatically at [`launch`]). Returns
+    /// the ids that were re-launched.
+    pub async fn recover_pending_workflows(&self) -> Result<Vec<String>> {
+        let executor = self.inner.executor_id.clone();
+        recover_pending_workflows(self.inner.clone(), &[executor]).await
     }
 
     /// Stop background tasks and drain in-flight workflows (up to `timeout`), then close the pool.
@@ -116,7 +150,23 @@ impl DbosBuilder {
 
     /// Register a durable workflow under an explicit `name` (Rust has no reflection-derived name).
     /// The concrete input/output types are captured here so recovery can decode stored inputs.
-    pub fn register_workflow<P, R, F, Fut>(mut self, name: &str, f: F) -> Self
+    pub fn register_workflow<P, R, F, Fut>(self, name: &str, f: F) -> Self
+    where
+        P: DeserializeOwned + Serialize + Send + 'static,
+        R: Serialize + DeserializeOwned + Send + 'static,
+        F: Fn(WorkflowContext, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+    {
+        self.register_workflow_with_options(name, RegistrationOptions::default(), f)
+    }
+
+    /// Register a workflow with explicit [`RegistrationOptions`] (e.g. a custom `max_retries`).
+    pub fn register_workflow_with_options<P, R, F, Fut>(
+        mut self,
+        name: &str,
+        opts: RegistrationOptions,
+        f: F,
+    ) -> Self
     where
         P: DeserializeOwned + Serialize + Send + 'static,
         R: Serialize + DeserializeOwned + Send + 'static,
@@ -143,7 +193,7 @@ impl DbosBuilder {
             name.to_string(),
             RegistryEntry {
                 handler,
-                max_retries: DEFAULT_MAX_RECOVERY_ATTEMPTS,
+                max_retries: opts.max_retries,
                 name: name.to_string(),
                 class_name: None,
                 config_name: None,
@@ -179,7 +229,11 @@ impl DbosBuilder {
             cancel: CancellationToken::new(),
             poll_interval: Duration::from_secs(1),
         });
-        // M3 will run crash recovery for this executor here.
+
+        // Recover this executor's interrupted workflows.
+        let executor = inner.executor_id.clone();
+        recover_pending_workflows(inner.clone(), &[executor]).await?;
+
         Ok(Dbos { inner })
     }
 }

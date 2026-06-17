@@ -20,6 +20,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "json",
     "uuid",
     "chrono",
+    "macros",   # FromRow derive only — runtime queries, no compile-time DATABASE_URL needed
 ] }
 # Serialization: serde_json::Value is the universal persistence boundary.
 serde = { version = "1", features = ["derive"] }

@@ -213,6 +213,8 @@ impl WorkflowContext {
             Some(encoded),
             opts,
             Some((self.state.clone(), step_id)),
+            Format::Portable,
+            false,
         )
         .await
     }

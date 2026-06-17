@@ -14,6 +14,7 @@
 //! - [`serialize`] — payload serialization (`portable_json` default + `DBOS_JSON` reader).
 
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod serialize;
 

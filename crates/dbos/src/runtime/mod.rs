@@ -5,6 +5,7 @@ mod listener;
 mod queue;
 mod recovery;
 mod registry;
+mod scheduler;
 mod step;
 mod workflow;
 
@@ -28,10 +29,12 @@ use listener::{run_listener, WaiterRegistry};
 use queue::{run_queue, WorkerCounts};
 use recovery::recover_pending_workflows;
 use registry::{ErasedWorkflow, Registry, RegistryEntry};
+use scheduler::run_scheduler;
 use workflow::{enqueue_workflow, start_workflow};
 
 pub use context::WorkflowContext;
 pub use queue::{RateLimiter, WorkflowQueue};
+pub use scheduler::ScheduledWorkflowInput;
 pub use step::StepOptions;
 pub use workflow::WorkflowHandle;
 
@@ -179,6 +182,7 @@ pub struct DbosBuilder {
     config: Config,
     registry: HashMap<String, RegistryEntry>,
     queues: HashMap<String, WorkflowQueue>,
+    schedules: Vec<(String, String)>,
     registration_error: Option<DbosError>,
 }
 
@@ -188,8 +192,21 @@ impl DbosBuilder {
             config,
             registry: HashMap::new(),
             queues: HashMap::new(),
+            schedules: Vec::new(),
             registration_error: None,
         }
+    }
+
+    /// Register a workflow to run on a cron schedule. The workflow receives a
+    /// [`ScheduledWorkflowInput`] with the tick it is firing for. Supports 5-field cron and
+    /// 6-field (seconds-first) cron.
+    pub fn register_scheduled<F, Fut>(mut self, name: &str, cron: &str, f: F) -> Self
+    where
+        F: Fn(WorkflowContext, ScheduledWorkflowInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.schedules.push((name.to_string(), cron.to_string()));
+        self.register_workflow(name, f)
     }
 
     /// Register a durable queue. A background runner is started for it at [`launch`](Self::launch).
@@ -309,6 +326,15 @@ impl DbosBuilder {
             inner
                 .workflow_tasks
                 .spawn(async move { run_queue(runner_inner, queue, token).await });
+        }
+
+        // Start a cron loop per scheduled workflow.
+        for (name, cron) in self.schedules {
+            let sched_inner = inner.clone();
+            let token = inner.cancel.clone();
+            inner
+                .workflow_tasks
+                .spawn(async move { run_scheduler(sched_inner, name, cron, token).await });
         }
 
         Ok(Dbos { inner })

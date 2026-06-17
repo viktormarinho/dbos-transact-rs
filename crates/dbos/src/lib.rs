@@ -36,8 +36,9 @@ pub mod serialize;
 pub use config::{Config, Dialect};
 pub use error::{DbosError, DbosErrorCode, Result};
 pub use runtime::{
-    Dbos, DbosBuilder, EnqueueOptions, RateLimiter, RegistrationOptions, StepOptions,
-    WorkflowContext, WorkflowHandle, WorkflowOptions, WorkflowQueue, WorkflowStatusType,
+    Dbos, DbosBuilder, EnqueueOptions, RateLimiter, RegistrationOptions, ScheduledWorkflowInput,
+    StepOptions, WorkflowContext, WorkflowHandle, WorkflowOptions, WorkflowQueue,
+    WorkflowStatusType,
 };
 
 /// A boxed, `Send` future — the return type of type-erased workflow handlers.

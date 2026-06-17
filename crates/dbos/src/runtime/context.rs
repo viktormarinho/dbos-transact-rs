@@ -539,6 +539,21 @@ impl WorkflowContext {
         }
     }
 
+    /// Durably sleep for `duration`. The wake-up deadline is checkpointed, so after a crash the
+    /// workflow resumes and waits only the remaining time (even across days). Returns the duration
+    /// actually waited.
+    pub async fn sleep(&self, duration: Duration) -> Result<Duration> {
+        if self.within_step {
+            return Err(DbosError::step_execution(
+                &self.state.workflow_id,
+                "DBOS.sleep",
+                "cannot call Sleep within a step",
+            ));
+        }
+        let step_id = self.state.next_step_id();
+        self.record_sleep(step_id, duration, false).await
+    }
+
     /// Durable sleep machinery: record the absolute wake-up deadline as a `DBOS.sleep` step so a
     /// restart waits only the remaining time. Returns the remaining duration; with `skip_sleep` it
     /// does not block (used by `recv`/`get_event` timeouts, which do their own waiting).

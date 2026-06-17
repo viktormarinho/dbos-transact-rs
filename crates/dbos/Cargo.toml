@@ -44,6 +44,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 dashmap = "6"
 # Jitter for queue polling intervals.
 rand = "0.8"
+# Cron schedule parsing (6-field seconds-first).
+cron = "0.12"
 
 [dev-dependencies]
 pretty_assertions = "1"

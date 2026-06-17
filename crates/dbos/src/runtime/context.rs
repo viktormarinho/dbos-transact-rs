@@ -4,14 +4,23 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Serialize};
 
+use super::listener::WaiterRegistry;
 use super::step::{decoded_step_error, execute_step_with_retry, StepOptions};
 use super::workflow::{start_workflow, WorkflowHandle};
 use super::{DbosInner, WorkflowOptions};
-use crate::db::steps::{check_child_workflow, check_operation_execution, record_operation_result};
-use crate::error::{DbosError, Result};
+use crate::db::notifications::{
+    consume_oldest_notification, insert_notification, insert_workflow_event_history,
+    notification_exists_unconsumed, select_workflow_event, upsert_workflow_event, NULL_TOPIC,
+};
+use crate::db::now_epoch_ms;
+use crate::db::steps::{
+    check_child_workflow, check_operation_execution, record_operation_result, RecordedOperation,
+};
+use crate::error::{DbosError, DbosErrorCode, Result};
 use crate::serialize::{decode_value, encode_input, encode_value, serialize_workflow_error, Format};
 
 /// The authenticated identity carried by a workflow and inherited by its children.
@@ -217,5 +226,399 @@ impl WorkflowContext {
             false,
         )
         .await
+    }
+
+    /// Send a message to another workflow's mailbox. A durable step (sent exactly once across
+    /// replays). The destination workflow must exist.
+    pub async fn send<M: Serialize>(
+        &self,
+        destination_id: &str,
+        message: M,
+        topic: Option<&str>,
+    ) -> Result<()> {
+        if self.within_step {
+            return Err(DbosError::step_execution(
+                &self.state.workflow_id,
+                "DBOS.send",
+                "cannot call Send within a step",
+            ));
+        }
+        let step_id = self.state.next_step_id();
+        if check_operation_execution(
+            &self.inner.pool,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.send",
+        )
+        .await?
+        .is_some()
+        {
+            return Ok(());
+        }
+        let topic = topic.filter(|t| !t.is_empty()).unwrap_or(NULL_TOPIC);
+        let encoded = encode_value(&message, Format::Portable)?;
+        let unit = encode_value(&(), Format::Portable)?;
+        let mut tx = self.inner.pool.begin().await?;
+        insert_notification(
+            &mut tx,
+            &self.inner.schema,
+            destination_id,
+            topic,
+            &encoded,
+            Format::Portable.name(),
+        )
+        .await?;
+        record_operation_result(
+            &mut *tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.send",
+            Some(&unit),
+            None,
+            None,
+            Some(Format::Portable.name()),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Wait for a message on `topic` (default topic if `None`), up to `timeout`. Returns `Ok(None)`
+    /// on timeout. Only one `recv` may be active per `(workflow, topic)` at a time. The wait is
+    /// durable: it survives a restart and resumes for only the remaining time.
+    pub async fn recv<M: DeserializeOwned>(
+        &self,
+        topic: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Option<M>> {
+        if self.within_step {
+            return Err(DbosError::step_execution(
+                &self.state.workflow_id,
+                "DBOS.recv",
+                "cannot call Recv within a step",
+            ));
+        }
+        let step_id = self.state.next_step_id();
+        let sleep_step_id = self.state.next_step_id();
+        if let Some(rec) = check_operation_execution(
+            &self.inner.pool,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.recv",
+        )
+        .await?
+        {
+            return decode_optional::<M>(&rec);
+        }
+
+        let topic = topic.filter(|t| !t.is_empty()).unwrap_or(NULL_TOPIC);
+        let payload = format!("{}::{}", self.state.workflow_id, topic);
+        let notify = Arc::new(tokio::sync::Notify::new());
+        {
+            use dashmap::mapref::entry::Entry;
+            match self.inner.notifications_waiters.entry(payload.clone()) {
+                Entry::Occupied(_) => {
+                    return Err(DbosError::conflicting_id(&self.state.workflow_id))
+                }
+                Entry::Vacant(v) => {
+                    v.insert(notify.clone());
+                }
+            }
+        }
+        let _guard = WaiterGuard {
+            registry: &self.inner.notifications_waiters,
+            key: payload,
+        };
+
+        let remaining = self.record_sleep(sleep_step_id, timeout, true).await?;
+        let deadline = tokio::time::Instant::now() + remaining;
+        loop {
+            let notified = notify.notified();
+            if notification_exists_unconsumed(
+                &self.inner.pool,
+                &self.inner.schema,
+                &self.state.workflow_id,
+                topic,
+            )
+            .await?
+            {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::select! {
+                _ = notified => {}
+                _ = tokio::time::sleep_until(deadline) => {}
+            }
+        }
+
+        let mut tx = self.inner.pool.begin().await?;
+        let consumed = consume_oldest_notification(
+            &mut tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            topic,
+        )
+        .await?;
+        {
+            let output = consumed.as_ref().map(|(m, _)| m.as_str());
+            let serialization = consumed.as_ref().and_then(|(_, s)| s.as_deref());
+            record_operation_result(
+                &mut *tx,
+                &self.inner.schema,
+                &self.state.workflow_id,
+                step_id,
+                "DBOS.recv",
+                output,
+                None,
+                None,
+                Some(serialization.unwrap_or(Format::Portable.name())),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+
+        match consumed {
+            Some((msg, ser)) => Ok(Some(decode_value::<M>(
+                Some(&msg),
+                ser.as_deref().or(Some(Format::Portable.name())),
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Publish a key/value event from this workflow (readable by [`get_event`](Self::get_event)).
+    /// A durable step.
+    pub async fn set_event<V: Serialize>(&self, key: &str, value: V) -> Result<()> {
+        if self.within_step {
+            return Err(DbosError::step_execution(
+                &self.state.workflow_id,
+                "DBOS.setEvent",
+                "cannot call SetEvent within a step",
+            ));
+        }
+        let step_id = self.state.next_step_id();
+        if check_operation_execution(
+            &self.inner.pool,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.setEvent",
+        )
+        .await?
+        .is_some()
+        {
+            return Ok(());
+        }
+        let encoded = encode_value(&value, Format::Portable)?;
+        let unit = encode_value(&(), Format::Portable)?;
+        let mut tx = self.inner.pool.begin().await?;
+        upsert_workflow_event(
+            &mut tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            key,
+            &encoded,
+            Format::Portable.name(),
+        )
+        .await?;
+        insert_workflow_event_history(
+            &mut tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            key,
+            &encoded,
+            Format::Portable.name(),
+        )
+        .await?;
+        record_operation_result(
+            &mut *tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.setEvent",
+            Some(&unit),
+            None,
+            None,
+            Some(Format::Portable.name()),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Read another workflow's event for `key`, waiting up to `timeout` for it to be set. Returns
+    /// `Ok(None)` on timeout. Durable when called inside a workflow.
+    pub async fn get_event<V: DeserializeOwned>(
+        &self,
+        target_workflow_id: &str,
+        key: &str,
+        timeout: Duration,
+    ) -> Result<Option<V>> {
+        if self.within_step {
+            return Err(DbosError::step_execution(
+                &self.state.workflow_id,
+                "DBOS.getEvent",
+                "cannot call GetEvent within a step",
+            ));
+        }
+        let step_id = self.state.next_step_id();
+        let sleep_step_id = self.state.next_step_id();
+        if let Some(rec) = check_operation_execution(
+            &self.inner.pool,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.getEvent",
+        )
+        .await?
+        {
+            return decode_optional::<V>(&rec);
+        }
+
+        let payload = format!("{target_workflow_id}::{key}");
+        let notify = self
+            .inner
+            .events_waiters
+            .entry(payload.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
+            .clone();
+        let _guard = WaiterGuard {
+            registry: &self.inner.events_waiters,
+            key: payload,
+        };
+
+        let remaining = self.record_sleep(sleep_step_id, timeout, true).await?;
+        let deadline = tokio::time::Instant::now() + remaining;
+        let mut found: Option<(String, Option<String>)> = None;
+        loop {
+            let notified = notify.notified();
+            if let Some(ev) =
+                select_workflow_event(&self.inner.pool, &self.inner.schema, target_workflow_id, key)
+                    .await?
+            {
+                found = Some(ev);
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::select! {
+                _ = notified => {}
+                _ = tokio::time::sleep_until(deadline) => {}
+            }
+        }
+
+        {
+            let output = found.as_ref().map(|(v, _)| v.as_str());
+            let serialization = found.as_ref().and_then(|(_, s)| s.as_deref());
+            record_operation_result(
+                &self.inner.pool,
+                &self.inner.schema,
+                &self.state.workflow_id,
+                step_id,
+                "DBOS.getEvent",
+                output,
+                None,
+                None,
+                Some(serialization.unwrap_or(Format::Portable.name())),
+            )
+            .await?;
+        }
+        match found {
+            Some((v, ser)) => Ok(Some(decode_value::<V>(
+                Some(&v),
+                ser.as_deref().or(Some(Format::Portable.name())),
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Durable sleep machinery: record the absolute wake-up deadline as a `DBOS.sleep` step so a
+    /// restart waits only the remaining time. Returns the remaining duration; with `skip_sleep` it
+    /// does not block (used by `recv`/`get_event` timeouts, which do their own waiting).
+    pub(crate) async fn record_sleep(
+        &self,
+        step_id: i32,
+        duration: Duration,
+        skip_sleep: bool,
+    ) -> Result<Duration> {
+        let end_ms = if let Some(rec) = check_operation_execution(
+            &self.inner.pool,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            "DBOS.sleep",
+        )
+        .await?
+        {
+            decode_value::<i64>(rec.output.as_deref(), rec.serialization.as_deref())?
+        } else {
+            let end = now_epoch_ms() + duration.as_millis() as i64;
+            let output = encode_value(&end, Format::Portable)?;
+            match record_operation_result(
+                &self.inner.pool,
+                &self.inner.schema,
+                &self.state.workflow_id,
+                step_id,
+                "DBOS.sleep",
+                Some(&output),
+                None,
+                None,
+                Some(Format::Portable.name()),
+            )
+            .await
+            {
+                Ok(()) => end,
+                // Another process recorded the deadline first — read it back.
+                Err(e) if e.is(DbosErrorCode::ConflictingId) => {
+                    let rec = check_operation_execution(
+                        &self.inner.pool,
+                        &self.inner.schema,
+                        &self.state.workflow_id,
+                        step_id,
+                        "DBOS.sleep",
+                    )
+                    .await?
+                    .ok_or(e)?;
+                    decode_value::<i64>(rec.output.as_deref(), rec.serialization.as_deref())?
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        let remaining = Duration::from_millis((end_ms - now_epoch_ms()).max(0) as u64);
+        if !skip_sleep {
+            tokio::time::sleep(remaining).await;
+        }
+        Ok(remaining)
+    }
+}
+
+/// Removes its registry key on drop, so a waiter is always cleaned up.
+struct WaiterGuard<'a> {
+    registry: &'a WaiterRegistry,
+    key: String,
+}
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        self.registry.remove(&self.key);
+    }
+}
+
+/// Decode a recorded `recv`/`get_event` result: an error → `Err`, a NULL output (timeout) →
+/// `Ok(None)`, a value → `Ok(Some(..))`.
+fn decode_optional<M: DeserializeOwned>(rec: &RecordedOperation) -> Result<Option<M>> {
+    if let Some(err) = &rec.error {
+        return Err(decoded_step_error(err, rec.serialization.as_deref()));
+    }
+    match &rec.output {
+        None => Ok(None),
+        Some(out) => Ok(Some(decode_value::<M>(Some(out), rec.serialization.as_deref())?)),
     }
 }

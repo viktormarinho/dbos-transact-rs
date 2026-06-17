@@ -1,6 +1,7 @@
 //! The DBOS runtime: building, launching, and running durable workflows.
 
 mod context;
+mod listener;
 mod queue;
 mod recovery;
 mod registry;
@@ -23,6 +24,7 @@ use crate::error::{DbosError, Result};
 use crate::serialize::{decode_input, encode_input, encode_value, Format};
 use crate::BoxFuture;
 
+use listener::{run_listener, WaiterRegistry};
 use queue::{run_queue, WorkerCounts};
 use recovery::recover_pending_workflows;
 use registry::{ErasedWorkflow, Registry, RegistryEntry};
@@ -95,6 +97,9 @@ pub(crate) struct DbosInner {
     pub poll_interval: Duration,
     /// In-memory per-(queue, partition) running counts for worker concurrency.
     pub worker_counts: WorkerCounts,
+    /// Waiters for `recv` (keyed `"dest::topic"`) and `get_event` (keyed `"workflow::key"`).
+    pub notifications_waiters: WaiterRegistry,
+    pub events_waiters: WaiterRegistry,
 }
 
 /// A launched DBOS runtime handle. Cheap to clone.
@@ -280,7 +285,18 @@ impl DbosBuilder {
             cancel: CancellationToken::new(),
             poll_interval: Duration::from_secs(1),
             worker_counts: WorkerCounts::new(),
+            notifications_waiters: WaiterRegistry::new(),
+            events_waiters: WaiterRegistry::new(),
         });
+
+        // Start the LISTEN/NOTIFY listener that wakes recv/get_event waiters.
+        {
+            let listener_inner = inner.clone();
+            let token = inner.cancel.clone();
+            inner
+                .workflow_tasks
+                .spawn(async move { run_listener(listener_inner, token).await });
+        }
 
         // Recover this executor's interrupted workflows (re-enqueues queued ones).
         let executor = inner.executor_id.clone();

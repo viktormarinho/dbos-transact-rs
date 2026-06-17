@@ -2,6 +2,7 @@
 //! queue / notification SQL operations.
 
 pub mod migrate;
+pub mod queue;
 pub mod status;
 pub mod steps;
 

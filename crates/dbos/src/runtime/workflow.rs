@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::{oneshot, Mutex};
 
 use super::context::{AuthIdentity, WorkflowContext, WorkflowState};
-use super::{DbosInner, WorkflowOptions};
+use super::{DbosInner, EnqueueOptions, WorkflowOptions};
 use crate::db::now_epoch_ms;
 use crate::db::status::{
     await_workflow_result, get_status, insert_workflow_status, update_workflow_outcome,
@@ -60,6 +60,19 @@ impl<R> WorkflowHandle<R> {
 
     pub fn workflow_id(&self) -> &str {
         &self.id
+    }
+}
+
+impl<R> std::fmt::Debug for WorkflowHandle<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self.kind {
+            HandleKind::Owned(_) => "Owned",
+            HandleKind::Polling => "Polling",
+        };
+        f.debug_struct("WorkflowHandle")
+            .field("id", &self.id)
+            .field("kind", &kind)
+            .finish()
     }
 }
 
@@ -251,6 +264,88 @@ pub(crate) async fn start_workflow<R>(
     });
 
     Ok(WorkflowHandle::owned(workflow_id, inner, rx))
+}
+
+/// Enqueue a registered workflow onto `queue_name` (status `ENQUEUED`, or `DELAYED` with a delay).
+/// The body is not run here — a queue runner dequeues and runs it. Returns a polling handle.
+pub(crate) async fn enqueue_workflow<R>(
+    inner: Arc<DbosInner>,
+    queue_name: &str,
+    name: &str,
+    encoded_input: Option<String>,
+    opts: EnqueueOptions,
+) -> Result<WorkflowHandle<R>> {
+    let (max_retries, class_name, config_name) = {
+        let entry = inner
+            .registry
+            .get(name)
+            .ok_or_else(|| DbosError::other(format!("workflow {name} is not registered")))?;
+        (entry.max_retries, entry.class_name.clone(), entry.config_name.clone())
+    };
+
+    let workflow_id = opts
+        .workflow_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let fmt = Format::Portable;
+    let now = now_epoch_ms();
+    let app_version = opts
+        .application_version
+        .clone()
+        .unwrap_or_else(|| inner.application_version.clone());
+    let (status, delay_until) = match opts.delay {
+        Some(d) => (
+            WorkflowStatusType::Delayed,
+            Some(now + d.as_millis() as i64),
+        ),
+        None => (WorkflowStatusType::Enqueued, None),
+    };
+
+    let input = InsertWorkflowInput {
+        workflow_id: workflow_id.clone(),
+        status: status.as_str().to_string(),
+        name: name.to_string(),
+        queue_name: Some(queue_name.to_string()),
+        executor_id: inner.executor_id.clone(),
+        application_version: Some(app_version),
+        application_id: inner.application_id.clone(),
+        created_at: now,
+        updated_at: now,
+        // Enqueued/delayed workflows start at 0 recovery attempts (incremented at dequeue/recovery).
+        recovery_attempts: 0,
+        inputs: encoded_input,
+        priority: opts.priority.unwrap_or(0),
+        deduplication_id: opts.deduplication_id.clone(),
+        queue_partition_key: opts.queue_partition_key.clone(),
+        delay_until_epoch_ms: delay_until,
+        owner_xid: uuid::Uuid::new_v4().to_string(),
+        serialization: Some(fmt.name().to_string()),
+        class_name,
+        config_name,
+        increment: 0,
+        ..Default::default()
+    };
+
+    let mut tx = inner.pool.begin().await?;
+    match insert_workflow_status(&mut tx, &inner.schema, &input, max_retries).await {
+        Ok(_) => {
+            tx.commit().await?;
+            Ok(WorkflowHandle::polling(workflow_id, inner))
+        }
+        // A unique violation here is the (queue_name, deduplication_id) partial index.
+        Err(e) if e.is_db_unique_violation() => {
+            let _ = tx.rollback().await;
+            Err(DbosError::queue_deduplicated(
+                workflow_id,
+                queue_name,
+                opts.deduplication_id.unwrap_or_default(),
+            ))
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            Err(e)
+        }
+    }
 }
 
 fn resolve_auth(opts: &WorkflowOptions, parent: Option<&(Arc<WorkflowState>, i32)>) -> AuthIdentity {

@@ -1,6 +1,7 @@
 //! The DBOS runtime: building, launching, and running durable workflows.
 
 mod context;
+mod queue;
 mod recovery;
 mod registry;
 mod step;
@@ -22,11 +23,13 @@ use crate::error::{DbosError, Result};
 use crate::serialize::{decode_input, encode_input, encode_value, Format};
 use crate::BoxFuture;
 
+use queue::{run_queue, WorkerCounts};
 use recovery::recover_pending_workflows;
 use registry::{ErasedWorkflow, Registry, RegistryEntry};
-use workflow::start_workflow;
+use workflow::{enqueue_workflow, start_workflow};
 
 pub use context::WorkflowContext;
+pub use queue::{RateLimiter, WorkflowQueue};
 pub use step::StepOptions;
 pub use workflow::WorkflowHandle;
 
@@ -63,6 +66,23 @@ pub struct WorkflowOptions {
     pub authenticated_roles: Option<Vec<String>>,
 }
 
+/// Options for enqueueing a workflow onto a durable queue.
+#[derive(Debug, Default, Clone)]
+pub struct EnqueueOptions {
+    /// Explicit workflow id (defaults to a UUIDv4).
+    pub workflow_id: Option<String>,
+    /// Deduplication key — at most one live workflow per `(queue, deduplication_id)`.
+    pub deduplication_id: Option<String>,
+    /// Priority (lower runs first; default 0). Only meaningful on a priority-enabled queue.
+    pub priority: Option<i32>,
+    /// Partition key (for a partitioned queue).
+    pub queue_partition_key: Option<String>,
+    /// Delay before the workflow becomes eligible to run (status `DELAYED` until then).
+    pub delay: Option<std::time::Duration>,
+    /// Override the application version.
+    pub application_version: Option<String>,
+}
+
 pub(crate) struct DbosInner {
     pub pool: PgPool,
     pub schema: String,
@@ -71,9 +91,10 @@ pub(crate) struct DbosInner {
     pub application_id: Option<String>,
     pub registry: Arc<Registry>,
     pub workflow_tasks: TaskTracker,
-    #[allow(dead_code)]
     pub cancel: CancellationToken,
     pub poll_interval: Duration,
+    /// In-memory per-(queue, partition) running counts for worker concurrency.
+    pub worker_counts: WorkerCounts,
 }
 
 /// A launched DBOS runtime handle. Cheap to clone.
@@ -111,6 +132,22 @@ impl Dbos {
         .await
     }
 
+    /// Enqueue a registered workflow onto a durable queue. A background runner picks it up subject
+    /// to the queue's concurrency / rate / priority controls. Returns a polling handle.
+    pub async fn enqueue<P, R>(
+        &self,
+        queue_name: &str,
+        workflow_name: &str,
+        input: P,
+        opts: EnqueueOptions,
+    ) -> Result<WorkflowHandle<R>>
+    where
+        P: Serialize + Send,
+    {
+        let encoded = encode_input(&input, Format::Portable)?;
+        enqueue_workflow::<R>(self.inner.clone(), queue_name, workflow_name, Some(encoded), opts).await
+    }
+
     /// Get a polling handle to an existing workflow by id.
     pub fn retrieve_workflow<R>(&self, workflow_id: &str) -> WorkflowHandle<R> {
         WorkflowHandle::polling(workflow_id.to_string(), self.inner.clone())
@@ -136,6 +173,7 @@ impl Dbos {
 pub struct DbosBuilder {
     config: Config,
     registry: HashMap<String, RegistryEntry>,
+    queues: HashMap<String, WorkflowQueue>,
     registration_error: Option<DbosError>,
 }
 
@@ -144,8 +182,21 @@ impl DbosBuilder {
         DbosBuilder {
             config,
             registry: HashMap::new(),
+            queues: HashMap::new(),
             registration_error: None,
         }
+    }
+
+    /// Register a durable queue. A background runner is started for it at [`launch`](Self::launch).
+    pub fn register_queue(mut self, queue: WorkflowQueue) -> Self {
+        if self.queues.contains_key(&queue.name) {
+            if self.registration_error.is_none() {
+                self.registration_error = Some(DbosError::conflicting_registration(&queue.name));
+            }
+            return self;
+        }
+        self.queues.insert(queue.name.clone(), queue);
+        self
     }
 
     /// Register a durable workflow under an explicit `name` (Rust has no reflection-derived name).
@@ -228,11 +279,21 @@ impl DbosBuilder {
             workflow_tasks: TaskTracker::new(),
             cancel: CancellationToken::new(),
             poll_interval: Duration::from_secs(1),
+            worker_counts: WorkerCounts::new(),
         });
 
-        // Recover this executor's interrupted workflows.
+        // Recover this executor's interrupted workflows (re-enqueues queued ones).
         let executor = inner.executor_id.clone();
         recover_pending_workflows(inner.clone(), &[executor]).await?;
+
+        // Start a background runner per registered queue.
+        for queue in self.queues.into_values() {
+            let runner_inner = inner.clone();
+            let token = inner.cancel.clone();
+            inner
+                .workflow_tasks
+                .spawn(async move { run_queue(runner_inner, queue, token).await });
+        }
 
         Ok(Dbos { inner })
     }

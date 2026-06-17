@@ -40,6 +40,10 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 # CancellationToken + TaskTracker (drain in-flight workflows on shutdown).
 tokio-util = { version = "0.7", features = ["rt"] }
+# In-memory per-(queue,partition) worker-concurrency counters.
+dashmap = "6"
+# Jitter for queue polling intervals.
+rand = "0.8"
 
 [dev-dependencies]
 pretty_assertions = "1"

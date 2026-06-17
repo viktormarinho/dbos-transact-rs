@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::workflow::start_workflow;
 use super::{DbosInner, WorkflowOptions};
+use crate::db::queue::clear_queue_assignment;
 use crate::db::status::list_pending_for_recovery;
 use crate::error::Result;
 use crate::serialize::Format;
@@ -23,8 +24,12 @@ pub(crate) async fn recover_pending_workflows(
     let mut recovered = Vec::new();
     for wf in pending {
         if wf.queue_name.is_some() {
-            // Queued workflows are recovered by re-enqueueing them (durable queues milestone).
-            tracing::debug!(workflow_id = %wf.id, "skipping recovery of queued workflow");
+            // A queued workflow is recovered by pushing it back to ENQUEUED so a runner reclaims it.
+            match clear_queue_assignment(&inner.pool, &inner.schema, &wf.id).await {
+                Ok(true) => recovered.push(wf.id),
+                Ok(false) => {} // already completed/moved
+                Err(e) => tracing::error!(workflow_id = %wf.id, error = %e, "re-enqueue failed"),
+            }
             continue;
         }
         if inner.registry.get(&wf.name).is_none() {

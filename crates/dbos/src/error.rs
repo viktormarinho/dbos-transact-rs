@@ -122,6 +122,23 @@ impl DbosError {
         self
     }
 
+    fn source_sqlx(&self) -> Option<&sqlx::Error> {
+        self.source.as_ref()?.downcast_ref::<sqlx::Error>()
+    }
+
+    /// True if this wraps a transient database contention error (serialization failure / deadlock /
+    /// lock-not-available) — the queue runner backs off on these.
+    pub fn is_db_contention(&self) -> bool {
+        self.source_sqlx()
+            .map(|e| is_contention(e) || is_lock_not_available(e))
+            .unwrap_or(false)
+    }
+
+    /// True if this wraps a database unique-constraint violation (e.g. a queue deduplication clash).
+    pub fn is_db_unique_violation(&self) -> bool {
+        self.source_sqlx().map(is_unique_violation).unwrap_or(false)
+    }
+
     // ---- Context accessors -------------------------------------------------------------------
 
     pub fn workflow_id(&self) -> Option<&str> {
@@ -486,6 +503,11 @@ pub fn is_foreign_key_violation(e: &sqlx::Error) -> bool {
 /// Transient contention: `40001 serialization_failure` or `40P01 deadlock_detected`.
 pub fn is_contention(e: &sqlx::Error) -> bool {
     matches!(sqlstate(e).as_deref(), Some("40001") | Some("40P01"))
+}
+
+/// `55P03 lock_not_available` (a `FOR UPDATE NOWAIT` that could not acquire its lock).
+pub fn is_lock_not_available(e: &sqlx::Error) -> bool {
+    sqlstate(e).as_deref() == Some("55P03")
 }
 
 #[cfg(test)]

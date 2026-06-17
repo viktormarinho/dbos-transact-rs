@@ -27,13 +27,16 @@
 //! # }
 //! ```
 
+pub mod client;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod runtime;
 pub mod serialize;
 
+pub use client::Client;
 pub use config::{Config, Dialect};
+pub use db::management::{ForkWorkflowInput, ListWorkflowsFilter, StepInfo, WorkflowStatus};
 pub use error::{DbosError, DbosErrorCode, Result};
 pub use runtime::{
     Dbos, DbosBuilder, EnqueueOptions, RateLimiter, RegistrationOptions, ScheduledWorkflowInput,

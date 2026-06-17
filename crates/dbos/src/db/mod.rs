@@ -1,6 +1,7 @@
 //! The DBOS system database: connection, schema migrations, and all the workflow / step /
 //! queue / notification SQL operations.
 
+pub mod management;
 pub mod migrate;
 pub mod notifications;
 pub mod queue;

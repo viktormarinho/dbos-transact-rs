@@ -212,7 +212,7 @@ impl WorkflowContext {
         )
         .await?
         {
-            return Ok(WorkflowHandle::polling(child_id, self.inner.clone()));
+            return Ok(WorkflowHandle::polling_from_inner(child_id, &self.inner));
         }
 
         let encoded = encode_input(&input, Format::Portable)?;

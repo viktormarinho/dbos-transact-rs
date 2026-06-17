@@ -2,8 +2,10 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
+use sqlx::PgPool;
 use tokio::sync::{oneshot, Mutex};
 
 use super::context::{AuthIdentity, WorkflowContext, WorkflowState};
@@ -23,7 +25,9 @@ use crate::serialize::{
 /// [`get_result`](Self::get_result).
 pub struct WorkflowHandle<R> {
     id: String,
-    inner: Arc<DbosInner>,
+    pool: PgPool,
+    schema: String,
+    poll_interval: Duration,
     kind: HandleKind,
     _pd: PhantomData<fn() -> R>,
 }
@@ -36,10 +40,17 @@ enum HandleKind {
 }
 
 impl<R> WorkflowHandle<R> {
-    pub(crate) fn polling(id: String, inner: Arc<DbosInner>) -> Self {
+    pub(crate) fn polling(
+        id: String,
+        pool: PgPool,
+        schema: String,
+        poll_interval: Duration,
+    ) -> Self {
         WorkflowHandle {
             id,
-            inner,
+            pool,
+            schema,
+            poll_interval,
             kind: HandleKind::Polling,
             _pd: PhantomData,
         }
@@ -47,15 +58,42 @@ impl<R> WorkflowHandle<R> {
 
     pub(crate) fn owned(
         id: String,
-        inner: Arc<DbosInner>,
+        pool: PgPool,
+        schema: String,
+        poll_interval: Duration,
         rx: oneshot::Receiver<Result<String>>,
     ) -> Self {
         WorkflowHandle {
             id,
-            inner,
+            pool,
+            schema,
+            poll_interval,
             kind: HandleKind::Owned(Mutex::new(Some(rx))),
             _pd: PhantomData,
         }
+    }
+
+    pub(crate) fn polling_from_inner(id: String, inner: &DbosInner) -> Self {
+        Self::polling(
+            id,
+            inner.pool.clone(),
+            inner.schema.clone(),
+            inner.poll_interval,
+        )
+    }
+
+    pub(crate) fn owned_from_inner(
+        id: String,
+        inner: &DbosInner,
+        rx: oneshot::Receiver<Result<String>>,
+    ) -> Self {
+        Self::owned(
+            id,
+            inner.pool.clone(),
+            inner.schema.clone(),
+            inner.poll_interval,
+            rx,
+        )
     }
 
     pub fn workflow_id(&self) -> &str {
@@ -94,13 +132,8 @@ impl<R: DeserializeOwned> WorkflowHandle<R> {
             }
         }
 
-        let outcome = await_workflow_result(
-            &self.inner.pool,
-            &self.inner.schema,
-            &self.id,
-            self.inner.poll_interval,
-        )
-        .await?;
+        let outcome =
+            await_workflow_result(&self.pool, &self.schema, &self.id, self.poll_interval).await?;
         match outcome {
             AwaitOutcome::Success {
                 output,
@@ -125,7 +158,7 @@ impl<R: DeserializeOwned> WorkflowHandle<R> {
 
     /// Read the workflow's current status without blocking.
     pub async fn get_status(&self) -> Result<Option<WorkflowStatusType>> {
-        let s = get_status(&self.inner.pool, &self.inner.schema, &self.id).await?;
+        let s = get_status(&self.pool, &self.schema, &self.id).await?;
         Ok(s.and_then(|s| WorkflowStatusType::from_str(&s)))
     }
 }
@@ -227,7 +260,7 @@ pub(crate) async fn start_workflow<R>(
     tx.commit().await?;
 
     if should_skip {
-        return Ok(WorkflowHandle::polling(workflow_id, inner));
+        return Ok(WorkflowHandle::polling_from_inner(workflow_id, &inner));
     }
 
     // Run the body in a tracked task; record its outcome and forward it to the owned handle.
@@ -263,7 +296,7 @@ pub(crate) async fn start_workflow<R>(
         let _ = tx_res.send(result);
     });
 
-    Ok(WorkflowHandle::owned(workflow_id, inner, rx))
+    Ok(WorkflowHandle::owned_from_inner(workflow_id, &inner, rx))
 }
 
 /// Enqueue a registered workflow onto `queue_name` (status `ENQUEUED`, or `DELAYED` with a delay).
@@ -330,7 +363,7 @@ pub(crate) async fn enqueue_workflow<R>(
     match insert_workflow_status(&mut tx, &inner.schema, &input, max_retries).await {
         Ok(_) => {
             tx.commit().await?;
-            Ok(WorkflowHandle::polling(workflow_id, inner))
+            Ok(WorkflowHandle::polling_from_inner(workflow_id, &inner))
         }
         // A unique violation here is the (queue_name, deduplication_id) partial index.
         Err(e) if e.is_db_unique_violation() => {

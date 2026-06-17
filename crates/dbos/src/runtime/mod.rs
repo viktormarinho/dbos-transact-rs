@@ -20,6 +20,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::config::{process_config, Config};
+use crate::db::management::{
+    self, ForkWorkflowInput, ListWorkflowsFilter, StepInfo, WorkflowStatus, INTERNAL_QUEUE_NAME,
+};
 use crate::db::{connect, run_migrations};
 use crate::error::{DbosError, Result};
 use crate::serialize::{decode_input, encode_input, encode_value, Format};
@@ -158,7 +161,7 @@ impl Dbos {
 
     /// Get a polling handle to an existing workflow by id.
     pub fn retrieve_workflow<R>(&self, workflow_id: &str) -> WorkflowHandle<R> {
-        WorkflowHandle::polling(workflow_id.to_string(), self.inner.clone())
+        WorkflowHandle::polling_from_inner(workflow_id.to_string(), &self.inner)
     }
 
     /// Re-run this executor's `PENDING` workflows (also run automatically at [`launch`]). Returns
@@ -166,6 +169,71 @@ impl Dbos {
     pub async fn recover_pending_workflows(&self) -> Result<Vec<String>> {
         let executor = self.inner.executor_id.clone();
         recover_pending_workflows(self.inner.clone(), &[executor]).await
+    }
+
+    // ---- Workflow management ----------------------------------------------------------------
+
+    /// List workflows matching `filter`.
+    pub async fn list_workflows(&self, filter: ListWorkflowsFilter) -> Result<Vec<WorkflowStatus>> {
+        management::list_workflows(&self.inner.pool, &self.inner.schema, filter).await
+    }
+
+    /// List a workflow's recorded steps, in order.
+    pub async fn list_workflow_steps(&self, workflow_id: &str) -> Result<Vec<StepInfo>> {
+        management::get_workflow_steps(&self.inner.pool, &self.inner.schema, workflow_id).await
+    }
+
+    /// Cancel a workflow (move it to `CANCELLED`). Errors if it does not exist.
+    pub async fn cancel_workflow(&self, workflow_id: &str) -> Result<()> {
+        let ids = [workflow_id.to_string()];
+        let found = management::cancel_workflows(&self.inner.pool, &self.inner.schema, &ids).await?;
+        if found.is_empty() {
+            return Err(DbosError::non_existent_workflow(workflow_id));
+        }
+        Ok(())
+    }
+
+    /// Cancel multiple workflows; missing/terminal ones are skipped. Returns the ids that existed.
+    pub async fn cancel_workflows(&self, workflow_ids: &[String]) -> Result<Vec<String>> {
+        management::cancel_workflows(&self.inner.pool, &self.inner.schema, workflow_ids).await
+    }
+
+    /// Resume a workflow: re-enqueue it so a runner re-executes it. Errors if it does not exist.
+    pub async fn resume_workflow<R>(&self, workflow_id: &str) -> Result<WorkflowHandle<R>> {
+        let ids = [workflow_id.to_string()];
+        let found = management::resume_workflows(
+            &self.inner.pool,
+            &self.inner.schema,
+            &ids,
+            INTERNAL_QUEUE_NAME,
+        )
+        .await?;
+        if found.is_empty() {
+            return Err(DbosError::non_existent_workflow(workflow_id));
+        }
+        Ok(self.retrieve_workflow(workflow_id))
+    }
+
+    /// Fork a workflow from `start_step`, copying earlier steps. Returns a handle to the new
+    /// (enqueued) workflow.
+    pub async fn fork_workflow<R>(&self, input: ForkWorkflowInput) -> Result<WorkflowHandle<R>> {
+        let new_id = management::fork_workflow(&self.inner.pool, &self.inner.schema, input).await?;
+        Ok(self.retrieve_workflow(&new_id))
+    }
+
+    /// Garbage-collect old terminal workflows (never `PENDING`/`ENQUEUED`/`DELAYED`).
+    pub async fn garbage_collect(
+        &self,
+        cutoff_epoch_ms: Option<i64>,
+        rows_threshold: Option<i64>,
+    ) -> Result<()> {
+        management::garbage_collect(
+            &self.inner.pool,
+            &self.inner.schema,
+            cutoff_epoch_ms,
+            rows_threshold,
+        )
+        .await
     }
 
     /// Stop background tasks and drain in-flight workflows (up to `timeout`), then close the pool.
@@ -276,7 +344,7 @@ impl DbosBuilder {
     }
 
     /// Validate config, connect, migrate the system database, and start the runtime.
-    pub async fn launch(self) -> Result<Dbos> {
+    pub async fn launch(mut self) -> Result<Dbos> {
         if let Some(e) = self.registration_error {
             return Err(e);
         }
@@ -318,6 +386,11 @@ impl DbosBuilder {
         // Recover this executor's interrupted workflows (re-enqueues queued ones).
         let executor = inner.executor_id.clone();
         recover_pending_workflows(inner.clone(), &[executor]).await?;
+
+        // The internal queue always has a runner (resumed/forked workflows land here).
+        self.queues
+            .entry(INTERNAL_QUEUE_NAME.to_string())
+            .or_insert_with(|| WorkflowQueue::new(INTERNAL_QUEUE_NAME));
 
         // Start a background runner per registered queue.
         for queue in self.queues.into_values() {

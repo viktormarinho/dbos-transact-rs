@@ -62,6 +62,7 @@ pub struct ListWorkflowsFilter {
     /// Only workflows that are on a queue.
     pub queues_only: bool,
     pub application_version: Option<String>,
+    pub executor_ids: Option<Vec<String>>,
     /// `created_at >= start_time` (epoch ms).
     pub start_time: Option<i64>,
     /// `created_at <= end_time` (epoch ms).
@@ -150,6 +151,12 @@ pub async fn list_workflows(
     if let Some(v) = &filter.application_version {
         connect(&mut qb);
         qb.push("application_version = ").push_bind(v.clone());
+    }
+    if let Some(execs) = &filter.executor_ids {
+        if !execs.is_empty() {
+            connect(&mut qb);
+            qb.push("executor_id = ANY(").push_bind(execs.clone()).push(")");
+        }
     }
     if let Some(t) = filter.start_time {
         connect(&mut qb);
@@ -271,6 +278,40 @@ pub async fn cancel_workflows(pool: &PgPool, schema: &str, ids: &[String]) -> Re
     .fetch_all(pool)
     .await?;
     Ok(found)
+}
+
+/// Permanently delete workflow rows by id (and their cascaded steps/events/streams).
+pub async fn delete_workflows(pool: &PgPool, schema: &str, ids: &[String]) -> Result<()> {
+    let prefix = schema_prefix(schema);
+    sqlx::query(&format!(
+        "DELETE FROM {prefix}workflow_status WHERE workflow_uuid = ANY($1)"
+    ))
+    .bind(ids.to_vec())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Cancel all non-terminal workflows created at or before `cutoff_epoch_ms` (conductor retention).
+pub async fn cancel_all_before(pool: &PgPool, schema: &str, cutoff_epoch_ms: i64) -> Result<()> {
+    let filter = ListWorkflowsFilter {
+        status: Some(vec![
+            WorkflowStatusType::Pending,
+            WorkflowStatusType::Enqueued,
+            WorkflowStatusType::Delayed,
+        ]),
+        end_time: Some(cutoff_epoch_ms),
+        ..Default::default()
+    };
+    let ids: Vec<String> = list_workflows(pool, schema, filter)
+        .await?
+        .into_iter()
+        .map(|w| w.id)
+        .collect();
+    if !ids.is_empty() {
+        cancel_workflows(pool, schema, &ids).await?;
+    }
+    Ok(())
 }
 
 /// Resume the given workflows: reset them to `ENQUEUED` on `queue_name` so a runner re-executes

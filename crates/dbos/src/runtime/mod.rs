@@ -1,5 +1,6 @@
 //! The DBOS runtime: building, launching, and running durable workflows.
 
+mod conductor;
 mod context;
 mod listener;
 mod queue;
@@ -481,6 +482,12 @@ impl DbosBuilder {
             return Err(e);
         }
         let pc = process_config(self.config)?;
+        let conductor_cfg = conductor::config_from(
+            pc.conductor_api_key.clone(),
+            pc.conductor_url.clone(),
+            &pc.app_name,
+            pc.conductor_executor_metadata.clone(),
+        );
         let pool = match &pc.system_db_pool {
             Some(p) => p.clone(),
             None => connect(pc.database_url.as_deref().unwrap_or_default(), 20).await?,
@@ -541,6 +548,15 @@ impl DbosBuilder {
             inner
                 .workflow_tasks
                 .spawn(async move { run_scheduler(sched_inner, name, cron, token).await });
+        }
+
+        // Connect to the conductor control plane, if configured.
+        if let Some(cc) = conductor_cfg {
+            let cond_inner = inner.clone();
+            let token = inner.cancel.clone();
+            inner
+                .workflow_tasks
+                .spawn(async move { conductor::run_conductor(cond_inner, cc, token).await });
         }
 
         Ok(Dbos { inner })

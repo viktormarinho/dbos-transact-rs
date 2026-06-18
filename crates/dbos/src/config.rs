@@ -196,8 +196,13 @@ pub struct Config {
     pub enable_patching: bool,
     /// How often dynamic schedules reconcile with the DB (default 30s).
     pub scheduler_polling_interval: Option<Duration>,
+    /// DBOS conductor service URL (`wss://...`). Defaults from `DBOS_DOMAIN` when an API key is set.
     pub conductor_url: Option<String>,
+    /// DBOS conductor API key. When set (or via the `DBOS__CLOUD` env trio), the conductor client
+    /// connects on launch.
     pub conductor_api_key: Option<String>,
+    /// Arbitrary JSON metadata reported to the conductor in `executor_info`.
+    pub conductor_executor_metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Config {
@@ -228,6 +233,7 @@ pub struct ProcessedConfig {
     pub dialect: Dialect,
     pub conductor_url: Option<String>,
     pub conductor_api_key: Option<String>,
+    pub conductor_executor_metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Validate and resolve a [`Config`] using the real process environment.
@@ -307,6 +313,7 @@ pub fn process_config_with_env(cfg: Config, env: &dyn EnvSource) -> Result<Proce
         dialect,
         conductor_url: cfg.conductor_url,
         conductor_api_key: cfg.conductor_api_key,
+        conductor_executor_metadata: cfg.conductor_executor_metadata,
     })
 }
 

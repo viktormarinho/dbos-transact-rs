@@ -75,6 +75,9 @@ async fn main() -> dbos::Result<()> {
   woken via LISTEN/NOTIFY. Great for progress feeds, LLM token streaming, or incremental output.
 - **🛠 Management & client** — list/cancel/resume/fork/garbage-collect workflows; a thin `Client`
   lets external apps enqueue and manage workflows without running a full runtime.
+- **☁️ Conductor integration** — set a `conductor_api_key` and the app connects out to a DBOS
+  conductor over websocket, serving management commands (list/get/cancel/resume/fork/recover/
+  retention) so it can be observed and operated from a control plane.
 
 Workflows are **decorator-free** — plain async functions registered by name — mirroring the Go
 SDK's ergonomics, which maps cleanly to Rust.
@@ -107,7 +110,8 @@ DBOS-written payloads cross-language readable; a reader for Go's `DBOS_JSON` is 
 | External client + workflow management (list/cancel/resume/fork/GC) | ✅ |
 | `js_superjson` reader — read an existing TypeScript-DBOS database | ✅ |
 | Durable streams (`write_stream`/`read_stream`/`read_stream_async`) | ✅ |
-| Admin HTTP server, cloud Conductor, OpenTelemetry, scheduler backfill | ⏳ planned |
+| Conductor (cloud control-plane) websocket integration | ✅ |
+| Admin HTTP server, OpenTelemetry, scheduler backfill | ⏳ planned |
 
 See [`ROADMAP.md`](ROADMAP.md) and [`DESIGN.md`](DESIGN.md) for the full plan and architecture.
 

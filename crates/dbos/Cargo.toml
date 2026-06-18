@@ -46,6 +46,11 @@ dashmap = "6"
 rand = "0.8"
 # Cron schedule parsing (6-field seconds-first).
 cron = "0.12"
+# Conductor websocket client (wss via rustls + webpki roots).
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# Install a default rustls crypto provider so `wss://` works at runtime.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 pretty_assertions = "1"

@@ -70,6 +70,9 @@ async fn main() -> dbos::Result<()> {
   woken instantly via Postgres `LISTEN`/`NOTIFY` (with a polling safety net), with durable timeouts.
 - **📅 Durable sleep & cron** — sleep for seconds or weeks through restarts; schedule workflows with
   cron, exactly once per tick across the fleet.
+- **🌊 Durable streams** — a workflow publishes an append-only, ordered log under a key
+  (`write_stream`/`close_stream`); consumers read it live (`read_stream`/`read_stream_async`),
+  woken via LISTEN/NOTIFY. Great for progress feeds, LLM token streaming, or incremental output.
 - **🛠 Management & client** — list/cancel/resume/fork/garbage-collect workflows; a thin `Client`
   lets external apps enqueue and manage workflows without running a full runtime.
 
@@ -103,8 +106,8 @@ DBOS-written payloads cross-language readable; a reader for Go's `DBOS_JSON` is 
 | Durable sleep + cron scheduler | ✅ |
 | External client + workflow management (list/cancel/resume/fork/GC) | ✅ |
 | `js_superjson` reader — read an existing TypeScript-DBOS database | ✅ |
-| Streams, scheduler backfill | ⏳ planned |
-| Admin HTTP server, cloud Conductor, OpenTelemetry | ⏳ planned |
+| Durable streams (`write_stream`/`read_stream`/`read_stream_async`) | ✅ |
+| Admin HTTP server, cloud Conductor, OpenTelemetry, scheduler backfill | ⏳ planned |
 
 See [`ROADMAP.md`](ROADMAP.md) and [`DESIGN.md`](DESIGN.md) for the full plan and architecture.
 

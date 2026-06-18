@@ -7,6 +7,7 @@ pub mod notifications;
 pub mod queue;
 pub mod status;
 pub mod steps;
+pub mod streams;
 
 pub use migrate::{run_migrations, should_migrate, SCHEMA_VERSION};
 

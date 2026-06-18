@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::listener::WaiterRegistry;
+use super::listener::WaiterGuard;
 use super::step::{decoded_step_error, execute_step_with_retry, StepOptions};
 use super::workflow::{start_workflow, WorkflowHandle};
 use super::{DbosInner, WorkflowOptions};
@@ -17,6 +17,7 @@ use crate::db::notifications::{
     notification_exists_unconsumed, select_workflow_event, upsert_workflow_event, NULL_TOPIC,
 };
 use crate::db::now_epoch_ms;
+use crate::db::streams::{write_stream_entry, STREAM_CLOSED_SENTINEL};
 use crate::db::steps::{
     check_child_workflow, check_operation_execution, record_operation_result, RecordedOperation,
 };
@@ -328,10 +329,7 @@ impl WorkflowContext {
                 }
             }
         }
-        let _guard = WaiterGuard {
-            registry: &self.inner.notifications_waiters,
-            key: payload,
-        };
+        let _guard = WaiterGuard::new(&self.inner.notifications_waiters, payload);
 
         let remaining = self.record_sleep(sleep_step_id, timeout, true).await?;
         let deadline = tokio::time::Instant::now() + remaining;
@@ -488,10 +486,7 @@ impl WorkflowContext {
             .entry(payload.clone())
             .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
             .clone();
-        let _guard = WaiterGuard {
-            registry: &self.inner.events_waiters,
-            key: payload,
-        };
+        let _guard = WaiterGuard::new(&self.inner.events_waiters, payload);
 
         let remaining = self.record_sleep(sleep_step_id, timeout, true).await?;
         let deadline = tokio::time::Instant::now() + remaining;
@@ -537,6 +532,76 @@ impl WorkflowContext {
             )?)),
             None => Ok(None),
         }
+    }
+
+    /// Append a value to a durable, append-only stream under `key` (a durable step, written exactly
+    /// once across replays). Consumers read it live with [`Dbos::read_stream`](super::Dbos::read_stream).
+    /// Errors if the stream is already closed.
+    pub async fn write_stream<V: Serialize>(&self, key: &str, value: V) -> Result<()> {
+        let encoded = encode_value(&value, Format::Portable)?;
+        self.write_stream_raw(key, "DBOS.writeStream", &encoded, Some(Format::Portable.name()))
+            .await
+    }
+
+    /// Close a stream, so readers stop once they reach this point.
+    pub async fn close_stream(&self, key: &str) -> Result<()> {
+        self.write_stream_raw(key, "DBOS.closeStream", STREAM_CLOSED_SENTINEL, None)
+            .await
+    }
+
+    async fn write_stream_raw(
+        &self,
+        key: &str,
+        step_name: &str,
+        value: &str,
+        serialization: Option<&str>,
+    ) -> Result<()> {
+        if self.within_step {
+            return Err(DbosError::step_execution(
+                &self.state.workflow_id,
+                step_name,
+                "cannot write to a stream within a step",
+            ));
+        }
+        let step_id = self.state.next_step_id();
+        if check_operation_execution(
+            &self.inner.pool,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            step_name,
+        )
+        .await?
+        .is_some()
+        {
+            return Ok(());
+        }
+        let unit = encode_value(&(), Format::Portable)?;
+        let mut tx = self.inner.pool.begin().await?;
+        write_stream_entry(
+            &mut tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            key,
+            value,
+            serialization,
+        )
+        .await?;
+        record_operation_result(
+            &mut *tx,
+            &self.inner.schema,
+            &self.state.workflow_id,
+            step_id,
+            step_name,
+            Some(&unit),
+            None,
+            None,
+            Some(Format::Portable.name()),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Durably sleep for `duration`. The wake-up deadline is checkpointed, so after a crash the
@@ -611,18 +676,6 @@ impl WorkflowContext {
             tokio::time::sleep(remaining).await;
         }
         Ok(remaining)
-    }
-}
-
-/// Removes its registry key on drop, so a waiter is always cleaned up.
-struct WaiterGuard<'a> {
-    registry: &'a WaiterRegistry,
-    key: String,
-}
-
-impl Drop for WaiterGuard<'_> {
-    fn drop(&mut self) {
-        self.registry.remove(&self.key);
     }
 }
 

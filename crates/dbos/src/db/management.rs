@@ -426,6 +426,17 @@ pub async fn fork_workflow(pool: &PgPool, schema: &str, input: ForkWorkflowInput
         .bind(input.start_step)
         .execute(&mut *tx)
         .await?;
+
+        sqlx::query(&format!(
+            "INSERT INTO {prefix}streams (workflow_uuid, key, value, \"offset\", function_id, serialization)
+             SELECT $1, key, value, \"offset\", function_id, serialization
+             FROM {prefix}streams WHERE workflow_uuid = $2 AND function_id < $3"
+        ))
+        .bind(&new_id)
+        .bind(&input.original_workflow_id)
+        .bind(input.start_step)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;

@@ -28,7 +28,7 @@ use crate::error::{DbosError, Result};
 use crate::serialize::{decode_input, encode_input, encode_value, Format};
 use crate::BoxFuture;
 
-use listener::{run_listener, WaiterRegistry};
+use listener::{run_listener, WaiterGuard, WaiterRegistry};
 use queue::{run_queue, WorkerCounts};
 use recovery::recover_pending_workflows;
 use registry::{ErasedWorkflow, Registry, RegistryEntry};
@@ -106,6 +106,8 @@ pub(crate) struct DbosInner {
     /// Waiters for `recv` (keyed `"dest::topic"`) and `get_event` (keyed `"workflow::key"`).
     pub notifications_waiters: WaiterRegistry,
     pub events_waiters: WaiterRegistry,
+    /// Waiters for stream readers (keyed `"workflow::key"`).
+    pub streams_waiters: WaiterRegistry,
 }
 
 /// A launched DBOS runtime handle. Cheap to clone.
@@ -234,6 +236,136 @@ impl Dbos {
             rows_threshold,
         )
         .await
+    }
+
+    // ---- Streams ----------------------------------------------------------------------------
+
+    /// Read a durable stream into a vector, blocking until it is closed or its producing workflow
+    /// finishes. Returns `(values, closed)`.
+    pub async fn read_stream<T: DeserializeOwned>(
+        &self,
+        workflow_id: &str,
+        key: &str,
+    ) -> Result<(Vec<T>, bool)> {
+        self.read_stream_from(workflow_id, key, 0, false).await
+    }
+
+    /// Read whatever is currently in a stream from `from_offset`, without blocking.
+    pub async fn read_stream_snapshot<T: DeserializeOwned>(
+        &self,
+        workflow_id: &str,
+        key: &str,
+        from_offset: i32,
+    ) -> Result<(Vec<T>, bool)> {
+        self.read_stream_from(workflow_id, key, from_offset, true).await
+    }
+
+    async fn read_stream_from<T: DeserializeOwned>(
+        &self,
+        workflow_id: &str,
+        key: &str,
+        from_offset: i32,
+        snapshot: bool,
+    ) -> Result<(Vec<T>, bool)> {
+        let payload = format!("{workflow_id}::{key}");
+        let notify = self
+            .inner
+            .streams_waiters
+            .entry(payload.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
+            .clone();
+        let _guard = WaiterGuard::new(&self.inner.streams_waiters, payload);
+        crate::db::streams::read_stream_blocking::<T>(
+            &self.inner.pool,
+            &self.inner.schema,
+            Some(&notify),
+            workflow_id,
+            key,
+            from_offset,
+            snapshot,
+        )
+        .await
+    }
+
+    /// Read a durable stream live: returns a receiver yielding each value as it is produced. The
+    /// channel closes when the stream closes or the producing workflow finishes.
+    pub fn read_stream_async<T: DeserializeOwned + Send + 'static>(
+        &self,
+        workflow_id: &str,
+        key: &str,
+    ) -> tokio::sync::mpsc::Receiver<Result<T>> {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let inner = self.inner.clone();
+        let wf = workflow_id.to_string();
+        let key = key.to_string();
+        self.inner.workflow_tasks.spawn(async move {
+            let payload = format!("{wf}::{key}");
+            let notify = inner
+                .streams_waiters
+                .entry(payload.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
+                .clone();
+            let _guard = WaiterGuard::new(&inner.streams_waiters, payload);
+            let mut current = 0i32;
+            loop {
+                let notified = notify.notified();
+                let (entries, closed) = match crate::db::streams::read_stream_entries(
+                    &inner.pool,
+                    &inner.schema,
+                    &wf,
+                    &key,
+                    current,
+                )
+                .await
+                {
+                    Ok(x) => x,
+                    Err(e) => {
+                        let _ = tx.send(Err(e)).await;
+                        return;
+                    }
+                };
+                let got = !entries.is_empty();
+                for e in entries {
+                    match crate::serialize::decode_value::<T>(
+                        Some(&e.value),
+                        e.serialization.as_deref(),
+                    ) {
+                        Ok(v) => {
+                            current = e.offset + 1;
+                            if tx.send(Ok(v)).await.is_err() {
+                                return; // receiver dropped
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                    }
+                }
+                if closed {
+                    return;
+                }
+                match crate::db::status::get_status(&inner.pool, &inner.schema, &wf).await {
+                    Ok(None) => {
+                        let _ = tx.send(Err(DbosError::non_existent_workflow(&wf))).await;
+                        return;
+                    }
+                    Ok(Some(s)) if s != "PENDING" && s != "ENQUEUED" => return,
+                    Ok(_) => {}
+                    Err(e) => {
+                        let _ = tx.send(Err(e)).await;
+                        return;
+                    }
+                }
+                if !got {
+                    tokio::select! {
+                        _ = notified => {}
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    }
+                }
+            }
+        });
+        rx
     }
 
     /// Stop background tasks and drain in-flight workflows (up to `timeout`), then close the pool.
@@ -372,6 +504,7 @@ impl DbosBuilder {
             worker_counts: WorkerCounts::new(),
             notifications_waiters: WaiterRegistry::new(),
             events_waiters: WaiterRegistry::new(),
+            streams_waiters: WaiterRegistry::new(),
         });
 
         // Start the LISTEN/NOTIFY listener that wakes recv/get_event waiters.

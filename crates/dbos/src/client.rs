@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -176,6 +177,25 @@ impl Client {
         rows_threshold: Option<i64>,
     ) -> Result<()> {
         management::garbage_collect(&self.pool, &self.schema, cutoff_epoch_ms, rows_threshold).await
+    }
+
+    /// Read a durable stream into a vector, blocking (via polling) until it is closed or its
+    /// producing workflow finishes. Returns `(values, closed)`.
+    pub async fn read_stream<T: DeserializeOwned>(
+        &self,
+        workflow_id: &str,
+        key: &str,
+    ) -> Result<(Vec<T>, bool)> {
+        crate::db::streams::read_stream_blocking::<T>(
+            &self.pool,
+            &self.schema,
+            None, // no listener task in a client; poll only
+            workflow_id,
+            key,
+            0,
+            false,
+        )
+        .await
     }
 
     /// Close the underlying connection pool.

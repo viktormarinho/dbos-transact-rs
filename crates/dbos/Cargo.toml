@@ -54,6 +54,23 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # Admin HTTP server.
 axum = "0.7"
 
+# --- Optional: OpenTelemetry OTLP trace export (enable with feature = "telemetry"). ---
+# Workflow/step `tracing` spans are always emitted; this feature adds a built-in OTLP exporter.
+opentelemetry = { version = "0.30", optional = true }
+opentelemetry_sdk = { version = "0.30", optional = true, features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.30", optional = true, features = ["http-proto", "reqwest-client"] }
+tracing-opentelemetry = { version = "0.31", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter", "registry"] }
+
+[features]
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+]
+
 [dev-dependencies]
 pretty_assertions = "1"
 tokio = { version = "1", features = ["full", "test-util"] }

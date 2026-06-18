@@ -78,6 +78,10 @@ async fn main() -> dbos::Result<()> {
 - **☁️ Conductor integration** — set a `conductor_api_key` and the app connects out to a DBOS
   conductor over websocket, serving management commands (list/get/cancel/resume/fork/recover/
   retention) so it can be observed and operated from a control plane.
+- **🩺 Admin server + 📊 OpenTelemetry** — an opt-in HTTP server (health, recovery, workflow
+  management) for orchestrators; and `tracing` spans on every workflow and step (carrying DBOS
+  attributes), with a built-in OTLP exporter behind the `telemetry` feature
+  (`dbos::telemetry::init(app, endpoint)`).
 
 Workflows are **decorator-free** — plain async functions registered by name — mirroring the Go
 SDK's ergonomics, which maps cleanly to Rust.
@@ -111,7 +115,9 @@ DBOS-written payloads cross-language readable; a reader for Go's `DBOS_JSON` is 
 | `js_superjson` reader — read an existing TypeScript-DBOS database | ✅ |
 | Durable streams (`write_stream`/`read_stream`/`read_stream_async`) | ✅ |
 | Conductor (cloud control-plane) websocket integration | ✅ |
-| Admin HTTP server, OpenTelemetry, scheduler backfill | ⏳ planned |
+| Admin HTTP server (health, recovery, workflow management) | ✅ |
+| OpenTelemetry — workflow/step spans + opt-in OTLP export (`telemetry` feature) | ✅ |
+| Scheduler backfill, Kafka helpers | ⏳ planned |
 
 See [`ROADMAP.md`](ROADMAP.md) and [`DESIGN.md`](DESIGN.md) for the full plan and architecture.
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use super::context::{AuthIdentity, WorkflowContext, WorkflowState};
 use super::DbosInner;
@@ -212,8 +213,26 @@ fn dispatch_dequeued(
     let inner2 = inner.clone();
     let id = wf.id.clone();
     let input = wf.inputs;
+    let span_name = wf.name.clone();
+    let executor = inner.executor_id.clone();
+    let app_ver = inner.application_version.clone();
     inner.workflow_tasks.spawn(async move {
-        let result = handler(ctx, input, fmt).await;
+        let span = tracing::info_span!(
+            "dbos.workflow",
+            "otel.name" = %span_name,
+            "otel.status_code" = tracing::field::Empty,
+            operationUUID = %id,
+            operationType = "workflow",
+            operationName = %span_name,
+            executorID = %executor,
+            applicationVersion = %app_ver,
+            "dbos.queue.name" = %queue_name,
+        );
+        let result = handler(ctx, input, fmt).instrument(span.clone()).await;
+        span.record(
+            "otel.status_code",
+            if result.is_ok() { "OK" } else { "ERROR" },
+        );
         let (status, output, err_str) = match &result {
             Ok(out) => (WorkflowStatusType::Success, Some(out.clone()), None),
             Err(e) => (

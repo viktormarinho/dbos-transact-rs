@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Serialize};
+use tracing::Instrument;
 
 use super::listener::WaiterGuard;
 use super::step::{decoded_step_error, execute_step_with_retry, StepOptions};
@@ -89,7 +90,7 @@ impl WorkflowContext {
         if let Some(replay) = self.replay_step::<R>(step_id, name).await? {
             return replay;
         }
-        let result = f(self.step_ctx()).await;
+        let result = f(self.step_ctx()).instrument(self.step_span(name)).await;
         self.record_step(step_id, name, &result).await?;
         result
     }
@@ -110,13 +111,24 @@ impl WorkflowContext {
             return replay;
         }
         let step_ctx = self.step_ctx();
-        let result =
-            execute_step_with_retry(&opts, name, &self.state.workflow_id, move || {
-                f(step_ctx.clone())
-            })
-            .await;
+        let result = execute_step_with_retry(&opts, name, &self.state.workflow_id, move || {
+            f(step_ctx.clone())
+        })
+        .instrument(self.step_span(name))
+        .await;
         self.record_step(step_id, name, &result).await?;
         result
+    }
+
+    /// A tracing span for a step (a child of the active workflow span).
+    fn step_span(&self, name: &str) -> tracing::Span {
+        tracing::info_span!(
+            "dbos.step",
+            "otel.name" = %name,
+            operationUUID = %self.state.workflow_id,
+            operationType = "step",
+            operationName = %name,
+        )
     }
 
     /// A child context marking that we are inside a step body.

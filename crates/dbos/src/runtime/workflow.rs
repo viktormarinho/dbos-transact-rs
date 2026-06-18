@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use sqlx::PgPool;
 use tokio::sync::{oneshot, Mutex};
+use tracing::Instrument;
 
 use super::context::{AuthIdentity, WorkflowContext, WorkflowState};
 use super::{DbosInner, EnqueueOptions, WorkflowOptions};
@@ -274,8 +275,25 @@ pub(crate) async fn start_workflow<R>(
     let pool = inner.pool.clone();
     let schema = inner.schema.clone();
     let id_for_task = workflow_id.clone();
+    let span_name = name.to_string();
+    let executor = inner.executor_id.clone();
+    let app_ver = inner.application_version.clone();
     inner.workflow_tasks.spawn(async move {
-        let result = handler(wf_ctx, encoded_input, fmt).await;
+        let span = tracing::info_span!(
+            "dbos.workflow",
+            "otel.name" = %span_name,
+            "otel.status_code" = tracing::field::Empty,
+            operationUUID = %id_for_task,
+            operationType = "workflow",
+            operationName = %span_name,
+            executorID = %executor,
+            applicationVersion = %app_ver,
+        );
+        let result = handler(wf_ctx, encoded_input, fmt).instrument(span.clone()).await;
+        span.record(
+            "otel.status_code",
+            if result.is_ok() { "OK" } else { "ERROR" },
+        );
         let (status, output, err_str) = match &result {
             Ok(out) => (WorkflowStatusType::Success, Some(out.clone()), None),
             Err(e) => (

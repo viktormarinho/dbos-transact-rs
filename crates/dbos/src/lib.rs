@@ -33,6 +33,8 @@ pub mod db;
 pub mod error;
 pub mod runtime;
 pub mod serialize;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 
 pub use client::Client;
 pub use config::{Config, Dialect};

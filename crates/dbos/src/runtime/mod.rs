@@ -1,5 +1,6 @@
 //! The DBOS runtime: building, launching, and running durable workflows.
 
+mod admin;
 mod conductor;
 mod context;
 mod listener;
@@ -101,6 +102,10 @@ pub(crate) struct DbosInner {
     pub registry: Arc<Registry>,
     pub workflow_tasks: TaskTracker,
     pub cancel: CancellationToken,
+    /// A child of `cancel` covering just the cron schedulers (cancelled on `/deactivate`).
+    pub scheduler_cancel: CancellationToken,
+    /// Set by `/deactivate`; latches scheduler shutdown.
+    pub deactivated: std::sync::atomic::AtomicBool,
     pub poll_interval: Duration,
     /// In-memory per-(queue, partition) running counts for worker concurrency.
     pub worker_counts: WorkerCounts,
@@ -109,6 +114,8 @@ pub(crate) struct DbosInner {
     pub events_waiters: WaiterRegistry,
     /// Waiters for stream readers (keyed `"workflow::key"`).
     pub streams_waiters: WaiterRegistry,
+    /// Registered queue configs, for the admin queues-metadata endpoint.
+    pub queues: HashMap<String, WorkflowQueue>,
 }
 
 /// A launched DBOS runtime handle. Cheap to clone.
@@ -494,6 +501,17 @@ impl DbosBuilder {
         };
         run_migrations(&pool, &pc.database_schema).await?;
 
+        // The internal queue always has a runner (resumed/forked workflows land here).
+        self.queues
+            .entry(INTERNAL_QUEUE_NAME.to_string())
+            .or_insert_with(|| WorkflowQueue::new(INTERNAL_QUEUE_NAME));
+
+        let admin_server = pc.admin_server;
+        let admin_port = pc.admin_server_port;
+        let cancel = CancellationToken::new();
+        let scheduler_cancel = cancel.child_token();
+        let queues_snapshot = self.queues.clone();
+
         let inner = Arc::new(DbosInner {
             pool,
             schema: pc.database_schema,
@@ -506,12 +524,15 @@ impl DbosBuilder {
             },
             registry: Arc::new(Registry(self.registry)),
             workflow_tasks: TaskTracker::new(),
-            cancel: CancellationToken::new(),
+            cancel,
+            scheduler_cancel,
+            deactivated: std::sync::atomic::AtomicBool::new(false),
             poll_interval: Duration::from_secs(1),
             worker_counts: WorkerCounts::new(),
             notifications_waiters: WaiterRegistry::new(),
             events_waiters: WaiterRegistry::new(),
             streams_waiters: WaiterRegistry::new(),
+            queues: queues_snapshot,
         });
 
         // Start the LISTEN/NOTIFY listener that wakes recv/get_event waiters.
@@ -527,11 +548,6 @@ impl DbosBuilder {
         let executor = inner.executor_id.clone();
         recover_pending_workflows(inner.clone(), &[executor]).await?;
 
-        // The internal queue always has a runner (resumed/forked workflows land here).
-        self.queues
-            .entry(INTERNAL_QUEUE_NAME.to_string())
-            .or_insert_with(|| WorkflowQueue::new(INTERNAL_QUEUE_NAME));
-
         // Start a background runner per registered queue.
         for queue in self.queues.into_values() {
             let runner_inner = inner.clone();
@@ -541,10 +557,10 @@ impl DbosBuilder {
                 .spawn(async move { run_queue(runner_inner, queue, token).await });
         }
 
-        // Start a cron loop per scheduled workflow.
+        // Start a cron loop per scheduled workflow (stoppable via /deactivate).
         for (name, cron) in self.schedules {
             let sched_inner = inner.clone();
-            let token = inner.cancel.clone();
+            let token = inner.scheduler_cancel.clone();
             inner
                 .workflow_tasks
                 .spawn(async move { run_scheduler(sched_inner, name, cron, token).await });
@@ -557,6 +573,15 @@ impl DbosBuilder {
             inner
                 .workflow_tasks
                 .spawn(async move { conductor::run_conductor(cond_inner, cc, token).await });
+        }
+
+        // Start the admin HTTP server, if enabled.
+        if admin_server {
+            let admin_inner = inner.clone();
+            let token = inner.cancel.clone();
+            inner
+                .workflow_tasks
+                .spawn(async move { admin::run_admin_server(admin_inner, admin_port, token).await });
         }
 
         Ok(Dbos { inner })

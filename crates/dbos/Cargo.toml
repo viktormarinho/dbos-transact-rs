@@ -51,6 +51,8 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 # Install a default rustls crypto provider so `wss://` works at runtime.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Admin HTTP server.
+axum = "0.7"
 
 [dev-dependencies]
 pretty_assertions = "1"
@@ -62,3 +64,5 @@ sqlx = { version = "0.8", default-features = false, features = [
     "tls-rustls",
     "postgres",
 ] }
+# Admin-server integration test HTTP client.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

@@ -102,7 +102,8 @@ DBOS-written payloads cross-language readable; a reader for Go's `DBOS_JSON` is 
 | Notifications (`send`/`recv`) & events (`set`/`get`) via LISTEN/NOTIFY | ✅ |
 | Durable sleep + cron scheduler | ✅ |
 | External client + workflow management (list/cancel/resume/fork/GC) | ✅ |
-| `js_superjson` reader (TS interop), streams, scheduler backfill | ⏳ planned |
+| `js_superjson` reader — read an existing TypeScript-DBOS database | ✅ |
+| Streams, scheduler backfill | ⏳ planned |
 | Admin HTTP server, cloud Conductor, OpenTelemetry | ⏳ planned |
 
 See [`ROADMAP.md`](ROADMAP.md) and [`DESIGN.md`](DESIGN.md) for the full plan and architecture.

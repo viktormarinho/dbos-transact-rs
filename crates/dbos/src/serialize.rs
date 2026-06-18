@@ -10,8 +10,9 @@
 //!   portable mode) with no migration.
 //! - **`DBOS_JSON`** — base64(JSON). The Go SDK's native default. We can read and write it, mainly
 //!   so a Rust app can ingest a Go-written database out of the box.
-//! - **`js_superjson`** (read-only, planned) — the TypeScript SDK's native default. A reader is
-//!   planned for the serialization milestone so a Rust app can read an existing TS-DBOS database.
+//! - **`js_superjson`** (read-only) — the TypeScript SDK's native default. We can *read* it (both
+//!   the SuperJSON envelope and the legacy `DBOSJSON` format) so a Rust app can ingest an existing
+//!   TS-DBOS database; we never write it.
 //! - **`py_pickle`** — not supported (Python pickle is not portable); migrate such rows to
 //!   `portable_json` on the Python side first.
 //!
@@ -112,15 +113,162 @@ fn decode_to_json(data: Option<&str>, format: Option<&str>) -> Result<Value> {
                 Ok(serde_json::from_slice(&bytes)?)
             }
         },
-        SUPERJSON_NAME => Err(DbosError::other(
-            "js_superjson deserialization is not yet supported (planned for the serialization milestone)",
-        )),
+        SUPERJSON_NAME => match data {
+            None => Ok(Value::Null),
+            Some(s) => decode_superjson(s),
+        },
         PY_PICKLE_NAME => Err(DbosError::other(
             "py_pickle is not portable; re-serialize such rows to portable_json on the Python side",
         )),
         other => Err(DbosError::other(format!(
             "unknown serialization format {other:?}"
         ))),
+    }
+}
+
+// ---- js_superjson (read-only: TypeScript SDK interop) -----------------------------------------
+
+const SUPERJSON_MARKER: &str = "\"__dbos_serializer\":\"superjson\"";
+
+/// Decode a TypeScript-SDK `js_superjson` payload into a plain JSON value. Handles both the modern
+/// SuperJSON envelope (`{json, meta, __dbos_serializer:"superjson"}`) and the legacy `DBOSJSON`
+/// format (plain JSON with `{dbos_type:"dbos_Date"|"dbos_BigInt"}` wrappers). Rich JS types are
+/// lowered to JSON-native equivalents (Date → ISO string, BigInt → number, Map → object,
+/// undefined → null) so the result deserializes with serde.
+fn decode_superjson(data: &str) -> Result<Value> {
+    if data.contains(SUPERJSON_MARKER) {
+        let mut outer: Value = serde_json::from_str(data)?;
+        let obj = outer
+            .as_object_mut()
+            .ok_or_else(|| DbosError::other("invalid js_superjson payload: not an object"))?;
+        let mut json = obj.remove("json").unwrap_or(Value::Null);
+        if let Some(values) = obj.get("meta").and_then(|m| m.get("values")) {
+            apply_superjson_meta(&mut json, values);
+        }
+        Ok(json)
+    } else {
+        // Legacy DBOSJSON: plain JSON with type wrappers.
+        let mut v: Value = serde_json::from_str(data)?;
+        apply_legacy_revival(&mut v);
+        Ok(v)
+    }
+}
+
+/// Walk SuperJSON's `meta.values` annotation tree, transforming the matching JSON nodes.
+fn apply_superjson_meta(json: &mut Value, annotation: &Value) {
+    match annotation {
+        // A leaf type annotation applies to this node.
+        Value::String(tag) => apply_superjson_tag(json, tag),
+        // Compound annotation `[type, sub-annotations]` (e.g. a Map with typed values).
+        Value::Array(parts) => {
+            if let Some(Value::String(tag)) = parts.first() {
+                if let Some(sub) = parts.get(1) {
+                    apply_superjson_meta(json, sub);
+                }
+                apply_superjson_tag(json, tag);
+            }
+        }
+        // A branch: keys navigate into the JSON.
+        Value::Object(children) => {
+            for (key, child) in children {
+                if let Some(node) = navigate_mut(json, key) {
+                    apply_superjson_meta(node, child);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_superjson_tag(json: &mut Value, tag: &str) {
+    match tag {
+        // BigInt is stored as a string; lower to a JSON number when it fits.
+        "bigint" => {
+            if let Value::String(s) = json {
+                if let Ok(n) = s.parse::<i64>() {
+                    *json = Value::Number(n.into());
+                } else if let Ok(n) = s.parse::<u64>() {
+                    *json = Value::Number(n.into());
+                }
+            }
+        }
+        // A Map is stored as an array of [key, value] pairs; lower to an object (string keys).
+        "map" => {
+            if let Value::Array(pairs) = json {
+                let mut obj = serde_json::Map::new();
+                let mut ok = true;
+                for pair in pairs.iter() {
+                    match pair {
+                        Value::Array(kv) if kv.len() == 2 => match &kv[0] {
+                            Value::String(k) => {
+                                obj.insert(k.clone(), kv[1].clone());
+                            }
+                            other => {
+                                obj.insert(other.to_string(), kv[1].clone());
+                            }
+                        },
+                        _ => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    *json = Value::Object(obj);
+                }
+            }
+        }
+        // Date → ISO string, Set → array, undefined → null, regexp/URL/Error → string/object:
+        // already JSON-native, leave as-is.
+        _ => {}
+    }
+}
+
+fn navigate_mut<'a>(json: &'a mut Value, key: &str) -> Option<&'a mut Value> {
+    match json {
+        Value::Object(map) => map.get_mut(key),
+        Value::Array(arr) => key.parse::<usize>().ok().and_then(move |i| arr.get_mut(i)),
+        _ => None,
+    }
+}
+
+/// Revive the legacy `DBOSJSON` type wrappers in place: `{dbos_type:"dbos_Date", dbos_data}` → the
+/// ISO string, `{dbos_type:"dbos_BigInt", dbos_data}` → a number.
+fn apply_legacy_revival(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(t)) = map.get("dbos_type") {
+                match t.as_str() {
+                    "dbos_Date" => {
+                        if let Some(data) = map.get("dbos_data").cloned() {
+                            *value = data;
+                            return;
+                        }
+                    }
+                    "dbos_BigInt" => {
+                        if let Some(Value::String(s)) = map.get("dbos_data") {
+                            if let Ok(n) = s.parse::<i64>() {
+                                *value = Value::Number(n.into());
+                                return;
+                            } else if let Ok(n) = s.parse::<u64>() {
+                                *value = Value::Number(n.into());
+                                return;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for child in map.values_mut() {
+                apply_legacy_revival(child);
+            }
+        }
+        Value::Array(arr) => {
+            for child in arr.iter_mut() {
+                apply_legacy_revival(child);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -149,7 +297,9 @@ pub fn encode_input<T: Serialize>(value: &T, fmt: Format) -> Result<String> {
     }
 }
 
-/// Decode a workflow input, unwrapping the portable envelope's first positional argument.
+/// Decode a workflow input, unwrapping the first positional argument. Portable inputs use the
+/// `{positionalArgs,namedArgs}` envelope; TS-native (`js_superjson`) inputs are the bare
+/// positional-args array.
 pub fn decode_input<T: DeserializeOwned>(data: Option<&str>, format: Option<&str>) -> Result<T> {
     if format == Some(PORTABLE_NAME) {
         let value = match data {
@@ -158,6 +308,16 @@ pub fn decode_input<T: DeserializeOwned>(data: Option<&str>, format: Option<&str
                 let envelope: PortableArgs = serde_json::from_str(s)?;
                 envelope.positional_args.into_iter().next().unwrap_or(Value::Null)
             }
+        };
+        return Ok(serde_json::from_value(value)?);
+    }
+    if format == Some(SUPERJSON_NAME) {
+        let value = match data {
+            None => Value::Null,
+            Some(s) => match decode_superjson(s)? {
+                Value::Array(arr) => arr.into_iter().next().unwrap_or(Value::Null),
+                other => other,
+            },
         };
         return Ok(serde_json::from_value(value)?);
     }
@@ -400,11 +560,85 @@ mod tests {
 
     #[test]
     fn unsupported_formats_error_clearly() {
-        let err = decode_value::<Value>(Some("x"), Some(SUPERJSON_NAME)).unwrap_err();
-        assert!(err.to_string().contains("js_superjson"));
         let err = decode_value::<Value>(Some("x"), Some(PY_PICKLE_NAME)).unwrap_err();
         assert!(err.to_string().contains("py_pickle"));
         let err = decode_value::<Value>(Some("x"), Some("weird")).unwrap_err();
         assert!(err.to_string().contains("unknown serialization format"));
+    }
+
+    // ---- js_superjson reader (TypeScript SDK interop) -----------------------------------------
+
+    fn sj<T: DeserializeOwned>(stored: &str) -> T {
+        decode_value::<T>(Some(stored), Some(SUPERJSON_NAME)).unwrap()
+    }
+
+    #[test]
+    fn reads_plain_superjson() {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct V {
+            a: i64,
+            b: String,
+        }
+        // superjson.serialize({a:1,b:"x"}) has no meta.
+        let stored = r#"{"json":{"a":1,"b":"x"},"__dbos_serializer":"superjson"}"#;
+        assert_eq!(sj::<V>(stored), V { a: 1, b: "x".to_string() });
+    }
+
+    #[test]
+    fn reads_superjson_rich_types() {
+        // Date → ISO string; BigInt → number; undefined → null (None).
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct V {
+            when: String,
+            big: i64,
+            missing: Option<i32>,
+        }
+        let stored = r#"{"json":{"when":"2024-01-02T03:04:05.000Z","big":"9007199254740993","missing":null},
+            "meta":{"values":{"when":"Date","big":"bigint","missing":"undefined"}},
+            "__dbos_serializer":"superjson"}"#;
+        assert_eq!(
+            sj::<V>(stored),
+            V {
+                when: "2024-01-02T03:04:05.000Z".to_string(),
+                big: 9007199254740993,
+                missing: None,
+            }
+        );
+    }
+
+    #[test]
+    fn reads_superjson_root_bigint() {
+        let stored = r#"{"json":"99","meta":{"values":"bigint"},"__dbos_serializer":"superjson"}"#;
+        assert_eq!(sj::<i64>(stored), 99);
+    }
+
+    #[test]
+    fn reads_superjson_map() {
+        // A JS Map serializes to an array of [k,v] pairs annotated "map".
+        let stored = r#"{"json":[["a",1],["b",2]],"meta":{"values":"map"},"__dbos_serializer":"superjson"}"#;
+        let m: BTreeMap<String, i64> = sj(stored);
+        assert_eq!(m.get("a"), Some(&1));
+        assert_eq!(m.get("b"), Some(&2));
+    }
+
+    #[test]
+    fn reads_legacy_dbosjson() {
+        // Legacy DBOSJSON (no superjson marker): Date/BigInt wrappers.
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct V {
+            when: String,
+            big: i64,
+            plain: i32,
+        }
+        let stored = r#"{"when":{"dbos_type":"dbos_Date","dbos_data":"2024-01-02T03:04:05.000Z"},
+            "big":{"dbos_type":"dbos_BigInt","dbos_data":"123456789012345"},"plain":7}"#;
+        assert_eq!(
+            sj::<V>(stored),
+            V {
+                when: "2024-01-02T03:04:05.000Z".to_string(),
+                big: 123456789012345,
+                plain: 7,
+            }
+        );
     }
 }

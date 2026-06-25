@@ -64,7 +64,10 @@ async fn send_and_recv() {
         .await
         .unwrap();
 
-    assert_eq!(receiver.get_result().await.unwrap(), Some("hello".to_string()));
+    assert_eq!(
+        receiver.get_result().await.unwrap(),
+        Some("hello".to_string())
+    );
     dbos.shutdown(Duration::from_secs(2)).await;
 }
 
@@ -75,9 +78,13 @@ async fn set_and_get_event() {
         b.register_workflow("publisher", |ctx: WorkflowContext, _: ()| async move {
             ctx.set_event("status", "ready".to_string()).await
         })
-        .register_workflow("reader", |ctx: WorkflowContext, target: String| async move {
-            ctx.get_event::<String>(&target, "status", Duration::from_secs(5)).await
-        })
+        .register_workflow(
+            "reader",
+            |ctx: WorkflowContext, target: String| async move {
+                ctx.get_event::<String>(&target, "status", Duration::from_secs(5))
+                    .await
+            },
+        )
     })
     .await;
 
@@ -89,7 +96,11 @@ async fn set_and_get_event() {
         .unwrap();
 
     let read = dbos
-        .run_workflow::<_, Option<String>>("reader", "pub-1".to_string(), WorkflowOptions::default())
+        .run_workflow::<_, Option<String>>(
+            "reader",
+            "pub-1".to_string(),
+            WorkflowOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(read.get_result().await.unwrap(), Some("ready".to_string()));
@@ -105,9 +116,13 @@ async fn get_event_waits_for_later_set() {
             tokio::time::sleep(Duration::from_millis(300)).await;
             ctx.set_event("k", 99i64).await
         })
-        .register_workflow("reader", |ctx: WorkflowContext, target: String| async move {
-            ctx.get_event::<i64>(&target, "k", Duration::from_secs(5)).await
-        })
+        .register_workflow(
+            "reader",
+            |ctx: WorkflowContext, target: String| async move {
+                ctx.get_event::<i64>(&target, "k", Duration::from_secs(5))
+                    .await
+            },
+        )
     })
     .await;
 
@@ -139,7 +154,11 @@ async fn recv_times_out() {
         .run_workflow::<_, Option<String>>("waiter", (), WorkflowOptions::default())
         .await
         .unwrap();
-    assert_eq!(h.get_result().await.unwrap(), None, "recv returns None on timeout");
+    assert_eq!(
+        h.get_result().await.unwrap(),
+        None,
+        "recv returns None on timeout"
+    );
     dbos.shutdown(Duration::from_secs(2)).await;
 }
 
@@ -158,7 +177,11 @@ async fn get_event_times_out() {
         .run_workflow::<_, Option<String>>("reader", (), WorkflowOptions::default())
         .await
         .unwrap();
-    assert_eq!(h.get_result().await.unwrap(), None, "get_event returns None on timeout");
+    assert_eq!(
+        h.get_result().await.unwrap(),
+        None,
+        "get_event returns None on timeout"
+    );
     dbos.shutdown(Duration::from_secs(2)).await;
 }
 

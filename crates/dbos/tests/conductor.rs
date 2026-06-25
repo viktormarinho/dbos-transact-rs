@@ -107,7 +107,8 @@ async fn conductor_serves_management_requests() {
         ..Default::default()
     })
     .register_workflow("echo", |ctx: WorkflowContext, n: i64| async move {
-        ctx.run_step("the_step", |_| async { Ok::<_, DbosError>(()) }).await?;
+        ctx.run_step("the_step", |_| async { Ok::<_, DbosError>(()) })
+            .await?;
         Ok::<_, DbosError>(n)
     })
     .launch()
@@ -116,7 +117,14 @@ async fn conductor_serves_management_requests() {
 
     // Create wf-1, then let the server proceed.
     let h = dbos
-        .run_workflow::<_, i64>("echo", 42i64, WorkflowOptions { workflow_id: Some("wf-1".into()), ..Default::default() })
+        .run_workflow::<_, i64>(
+            "echo",
+            42i64,
+            WorkflowOptions {
+                workflow_id: Some("wf-1".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), 42);

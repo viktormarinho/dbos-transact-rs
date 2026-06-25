@@ -31,7 +31,8 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
                 self.0.insert(field.name().to_string(), value.to_string());
             }
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                self.0.insert(field.name().to_string(), format!("{value:?}"));
+                self.0
+                    .insert(field.name().to_string(), format!("{value:?}"));
             }
         }
         attrs.record(&mut V(&mut fields));
@@ -66,7 +67,8 @@ async fn workflow_and_step_spans_carry_dbos_attributes() {
         ..Default::default()
     })
     .register_workflow("echo", |ctx: WorkflowContext, n: i64| async move {
-        ctx.run_step("the_step", |_| async { Ok::<_, DbosError>(()) }).await?;
+        ctx.run_step("the_step", |_| async { Ok::<_, DbosError>(()) })
+            .await?;
         Ok::<_, DbosError>(n)
     })
     .launch()
@@ -74,7 +76,14 @@ async fn workflow_and_step_spans_carry_dbos_attributes() {
     .unwrap();
 
     let h = dbos
-        .run_workflow::<_, i64>("echo", 7i64, WorkflowOptions { workflow_id: Some("otel-wf".into()), ..Default::default() })
+        .run_workflow::<_, i64>(
+            "echo",
+            7i64,
+            WorkflowOptions {
+                workflow_id: Some("otel-wf".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), 7);
@@ -83,14 +92,24 @@ async fn workflow_and_step_spans_carry_dbos_attributes() {
     let find = |name: &str| spans.iter().find(|s| s.name == name).cloned();
 
     let wf = find("dbos.workflow").expect("workflow span");
-    assert_eq!(wf.fields.get("operationType").map(String::as_str), Some("workflow"));
+    assert_eq!(
+        wf.fields.get("operationType").map(String::as_str),
+        Some("workflow")
+    );
     assert!(wf.fields.get("otel.name").unwrap().contains("echo"));
     assert!(wf.fields.get("operationUUID").unwrap().contains("otel-wf"));
 
     let step = find("dbos.step").expect("step span");
-    assert_eq!(step.fields.get("operationType").map(String::as_str), Some("step"));
+    assert_eq!(
+        step.fields.get("operationType").map(String::as_str),
+        Some("step")
+    );
     assert!(step.fields.get("otel.name").unwrap().contains("the_step"));
-    assert!(step.fields.get("operationUUID").unwrap().contains("otel-wf"));
+    assert!(step
+        .fields
+        .get("operationUUID")
+        .unwrap()
+        .contains("otel-wf"));
 
     dbos.shutdown(Duration::from_secs(2)).await;
 }

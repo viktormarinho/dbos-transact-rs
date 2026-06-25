@@ -151,9 +151,10 @@ impl<R: DeserializeOwned> WorkflowHandle<R> {
                 },
             ),
             AwaitOutcome::Cancelled => Err(DbosError::awaited_workflow_cancelled(&self.id)),
-            AwaitOutcome::DeadLetter { recovery_attempts } => {
-                Err(DbosError::dead_letter_queue(&self.id, recovery_attempts - 2))
-            }
+            AwaitOutcome::DeadLetter { recovery_attempts } => Err(DbosError::dead_letter_queue(
+                &self.id,
+                recovery_attempts - 2,
+            )),
         }
     }
 
@@ -289,7 +290,9 @@ pub(crate) async fn start_workflow<R>(
             executorID = %executor,
             applicationVersion = %app_ver,
         );
-        let result = handler(wf_ctx, encoded_input, fmt).instrument(span.clone()).await;
+        let result = handler(wf_ctx, encoded_input, fmt)
+            .instrument(span.clone())
+            .await;
         span.record(
             "otel.status_code",
             if result.is_ok() { "OK" } else { "ERROR" },
@@ -331,7 +334,11 @@ pub(crate) async fn enqueue_workflow<R>(
             .registry
             .get(name)
             .ok_or_else(|| DbosError::other(format!("workflow {name} is not registered")))?;
-        (entry.max_retries, entry.class_name.clone(), entry.config_name.clone())
+        (
+            entry.max_retries,
+            entry.class_name.clone(),
+            entry.config_name.clone(),
+        )
     };
 
     let workflow_id = opts
@@ -399,7 +406,10 @@ pub(crate) async fn enqueue_workflow<R>(
     }
 }
 
-fn resolve_auth(opts: &WorkflowOptions, parent: Option<&(Arc<WorkflowState>, i32)>) -> AuthIdentity {
+fn resolve_auth(
+    opts: &WorkflowOptions,
+    parent: Option<&(Arc<WorkflowState>, i32)>,
+) -> AuthIdentity {
     let pauth = parent.map(|(p, _)| &p.auth);
     AuthIdentity {
         user: opts

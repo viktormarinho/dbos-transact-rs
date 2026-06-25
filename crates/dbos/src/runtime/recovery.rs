@@ -17,9 +17,13 @@ pub(crate) async fn recover_pending_workflows(
     inner: Arc<DbosInner>,
     executor_ids: &[String],
 ) -> Result<Vec<String>> {
-    let pending =
-        list_pending_for_recovery(&inner.pool, &inner.schema, executor_ids, &inner.application_version)
-            .await?;
+    let pending = list_pending_for_recovery(
+        &inner.pool,
+        &inner.schema,
+        executor_ids,
+        &inner.application_version,
+    )
+    .await?;
 
     let mut recovered = Vec::new();
     for wf in pending {

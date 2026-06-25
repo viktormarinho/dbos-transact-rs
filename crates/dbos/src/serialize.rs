@@ -317,7 +317,11 @@ pub fn decode_input<T: DeserializeOwned>(data: Option<&str>, format: Option<&str
             None | Some("null") => Value::Null,
             Some(s) => {
                 let envelope: PortableArgs = serde_json::from_str(s)?;
-                envelope.positional_args.into_iter().next().unwrap_or(Value::Null)
+                envelope
+                    .positional_args
+                    .into_iter()
+                    .next()
+                    .unwrap_or(Value::Null)
             }
         };
         return Ok(serde_json::from_value(value)?);
@@ -488,7 +492,10 @@ mod tests {
     #[test]
     fn nil_markers() {
         // Portable null is plain "null".
-        assert_eq!(encode_value(&Option::<i32>::None, Format::Portable).unwrap(), "null");
+        assert_eq!(
+            encode_value(&Option::<i32>::None, Format::Portable).unwrap(),
+            "null"
+        );
         // DBOS_JSON null is the __DBOS_NIL marker.
         assert_eq!(
             encode_value(&Option::<i32>::None, Format::DbosJson).unwrap(),
@@ -499,7 +506,10 @@ mod tests {
         assert_eq!(v, None);
         // Non-nil zero values are NOT treated as nil.
         assert_ne!(encode_value(&0i32, Format::DbosJson).unwrap(), NIL_MARKER);
-        assert_ne!(encode_value(&String::new(), Format::Portable).unwrap(), "null");
+        assert_ne!(
+            encode_value(&String::new(), Format::Portable).unwrap(),
+            "null"
+        );
     }
 
     #[test]
@@ -507,7 +517,8 @@ mod tests {
         // base64 of {"k":99} — the shape a Go SDK app would write under DBOS_JSON.
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let stored = STANDARD.encode(br#"{"k":99}"#);
-        let decoded: BTreeMap<String, i64> = decode_value(Some(&stored), Some(DBOS_JSON_NAME)).unwrap();
+        let decoded: BTreeMap<String, i64> =
+            decode_value(Some(&stored), Some(DBOS_JSON_NAME)).unwrap();
         assert_eq!(decoded.get("k"), Some(&99));
     }
 
@@ -535,11 +546,20 @@ mod tests {
             b: String,
         }
         let obj: V = decode_value(Some(r#"{"a":1,"b":"x"}"#), None).unwrap();
-        assert_eq!(obj, V { a: 1, b: "x".to_string() });
+        assert_eq!(
+            obj,
+            V {
+                a: 1,
+                b: "x".to_string()
+            }
+        );
 
         // Legacy DBOSJSON wrappers (Date/BigInt) under NULL serialization are revived too.
-        let big: i64 =
-            decode_value(Some(r#"{"dbos_type":"dbos_BigInt","dbos_data":"123"}"#), None).unwrap();
+        let big: i64 = decode_value(
+            Some(r#"{"dbos_type":"dbos_BigInt","dbos_data":"123"}"#),
+            None,
+        )
+        .unwrap();
         assert_eq!(big, 123);
 
         // And a Go base64 row under NULL still decodes (the fallback covers both origins).
@@ -622,7 +642,13 @@ mod tests {
         }
         // superjson.serialize({a:1,b:"x"}) has no meta.
         let stored = r#"{"json":{"a":1,"b":"x"},"__dbos_serializer":"superjson"}"#;
-        assert_eq!(sj::<V>(stored), V { a: 1, b: "x".to_string() });
+        assert_eq!(
+            sj::<V>(stored),
+            V {
+                a: 1,
+                b: "x".to_string()
+            }
+        );
     }
 
     #[test]
@@ -656,7 +682,8 @@ mod tests {
     #[test]
     fn reads_superjson_map() {
         // A JS Map serializes to an array of [k,v] pairs annotated "map".
-        let stored = r#"{"json":[["a",1],["b",2]],"meta":{"values":"map"},"__dbos_serializer":"superjson"}"#;
+        let stored =
+            r#"{"json":[["a",1],["b",2]],"meta":{"values":"map"},"__dbos_serializer":"superjson"}"#;
         let m: BTreeMap<String, i64> = sj(stored);
         assert_eq!(m.get("a"), Some(&1));
         assert_eq!(m.get("b"), Some(&2));

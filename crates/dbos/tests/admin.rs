@@ -49,7 +49,8 @@ async fn admin_server_serves_endpoints() {
         ..Default::default()
     })
     .register_workflow("echo", |ctx: WorkflowContext, n: i64| async move {
-        ctx.run_step("the_step", |_| async { Ok::<_, DbosError>(()) }).await?;
+        ctx.run_step("the_step", |_| async { Ok::<_, DbosError>(()) })
+            .await?;
         Ok::<_, DbosError>(n)
     })
     .register_queue(WorkflowQueue::new("q").worker_concurrency(3))
@@ -58,7 +59,14 @@ async fn admin_server_serves_endpoints() {
     .unwrap();
 
     let h = dbos
-        .run_workflow::<_, i64>("echo", 42i64, WorkflowOptions { workflow_id: Some("wf-1".into()), ..Default::default() })
+        .run_workflow::<_, i64>(
+            "echo",
+            42i64,
+            WorkflowOptions {
+                workflow_id: Some("wf-1".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), 42);
@@ -92,17 +100,43 @@ async fn admin_server_serves_endpoints() {
     assert_eq!(arr[0]["Output"], "42");
 
     // Get one workflow
-    let wf: Value = client.get(format!("{base}/workflows/wf-1")).send().await.unwrap().json().await.unwrap();
+    let wf: Value = client
+        .get(format!("{base}/workflows/wf-1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(wf["WorkflowName"], "echo");
 
     // List steps (snake_case)
-    let steps: Value = client.get(format!("{base}/workflows/wf-1/steps")).send().await.unwrap().json().await.unwrap();
+    let steps: Value = client
+        .get(format!("{base}/workflows/wf-1/steps"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(steps.as_array().unwrap().len(), 1);
     assert_eq!(steps[0]["function_name"], "the_step");
 
     // Queues metadata includes our queue
-    let queues: Value = client.get(format!("{base}/dbos-workflow-queues-metadata")).send().await.unwrap().json().await.unwrap();
-    let names: Vec<&str> = queues.as_array().unwrap().iter().map(|q| q["name"].as_str().unwrap()).collect();
+    let queues: Value = client
+        .get(format!("{base}/dbos-workflow-queues-metadata"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = queues
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["name"].as_str().unwrap())
+        .collect();
     assert!(names.contains(&"q"), "queues: {queues}");
 
     // Recovery returns an array
@@ -118,15 +152,27 @@ async fn admin_server_serves_endpoints() {
     assert!(rec.is_array());
 
     // Cancel a workflow → 204
-    let resp = client.post(format!("{base}/workflows/wf-1/cancel")).send().await.unwrap();
+    let resp = client
+        .post(format!("{base}/workflows/wf-1/cancel"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 204);
 
     // 404 for a missing workflow
-    let resp = client.get(format!("{base}/workflows/does-not-exist")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base}/workflows/does-not-exist"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 404);
 
     // Deactivate
-    let de = client.get(format!("{base}/deactivate")).send().await.unwrap();
+    let de = client
+        .get(format!("{base}/deactivate"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(de.text().await.unwrap(), "deactivated");
 
     dbos.shutdown(Duration::from_secs(2)).await;

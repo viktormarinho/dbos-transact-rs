@@ -72,7 +72,10 @@ async fn enqueue_runs_and_returns_results() {
 fn concurrency_tracker(
     running: Arc<AtomicUsize>,
     max_seen: Arc<AtomicUsize>,
-) -> impl Fn(WorkflowContext, ()) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DbosError>> + Send>>
+) -> impl Fn(
+    WorkflowContext,
+    (),
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DbosError>> + Send>>
        + Send
        + Sync
        + 'static {
@@ -95,7 +98,10 @@ async fn global_concurrency_limits_parallelism() {
     let running = Arc::new(AtomicUsize::new(0));
     let max_seen = Arc::new(AtomicUsize::new(0));
     let dbos = Dbos::builder(config(&schema))
-        .register_workflow("slow", concurrency_tracker(running.clone(), max_seen.clone()))
+        .register_workflow(
+            "slow",
+            concurrency_tracker(running.clone(), max_seen.clone()),
+        )
         .register_queue(fast_queue("q").global_concurrency(1))
         .launch()
         .await
@@ -112,7 +118,11 @@ async fn global_concurrency_limits_parallelism() {
     for h in &handles {
         h.get_result().await.unwrap();
     }
-    assert_eq!(max_seen.load(Ordering::SeqCst), 1, "global concurrency 1 serializes");
+    assert_eq!(
+        max_seen.load(Ordering::SeqCst),
+        1,
+        "global concurrency 1 serializes"
+    );
     dbos.shutdown(Duration::from_secs(3)).await;
 }
 
@@ -122,7 +132,10 @@ async fn worker_concurrency_limits_parallelism() {
     let running = Arc::new(AtomicUsize::new(0));
     let max_seen = Arc::new(AtomicUsize::new(0));
     let dbos = Dbos::builder(config(&schema))
-        .register_workflow("slow", concurrency_tracker(running.clone(), max_seen.clone()))
+        .register_workflow(
+            "slow",
+            concurrency_tracker(running.clone(), max_seen.clone()),
+        )
         .register_queue(fast_queue("q").worker_concurrency(2))
         .launch()
         .await
@@ -139,7 +152,11 @@ async fn worker_concurrency_limits_parallelism() {
     for h in &handles {
         h.get_result().await.unwrap();
     }
-    assert_eq!(max_seen.load(Ordering::SeqCst), 2, "worker concurrency caps at 2");
+    assert_eq!(
+        max_seen.load(Ordering::SeqCst),
+        2,
+        "worker concurrency caps at 2"
+    );
     dbos.shutdown(Duration::from_secs(3)).await;
 }
 
@@ -262,7 +279,10 @@ async fn delayed_execution() {
         )
         .await
         .unwrap();
-    assert_eq!(h.get_status().await.unwrap(), Some(WorkflowStatusType::Delayed));
+    assert_eq!(
+        h.get_status().await.unwrap(),
+        Some(WorkflowStatusType::Delayed)
+    );
     assert_eq!(h.get_result().await.unwrap(), 7);
     assert!(
         start.elapsed() >= Duration::from_millis(250),
@@ -371,6 +391,10 @@ async fn queue_recovery_reenqueues_claimed_workflow() {
         .await
         .unwrap();
     assert_eq!(result, "done");
-    assert_eq!(ran.load(Ordering::SeqCst), 2, "the stuck workflow was run once after recovery");
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        2,
+        "the stuck workflow was run once after recovery"
+    );
     dbos.shutdown(Duration::from_secs(3)).await;
 }

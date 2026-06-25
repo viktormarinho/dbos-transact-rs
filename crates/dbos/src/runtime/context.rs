@@ -18,12 +18,14 @@ use crate::db::notifications::{
     notification_exists_unconsumed, select_workflow_event, upsert_workflow_event, NULL_TOPIC,
 };
 use crate::db::now_epoch_ms;
-use crate::db::streams::{write_stream_entry, STREAM_CLOSED_SENTINEL};
 use crate::db::steps::{
     check_child_workflow, check_operation_execution, record_operation_result, RecordedOperation,
 };
+use crate::db::streams::{write_stream_entry, STREAM_CLOSED_SENTINEL};
 use crate::error::{DbosError, DbosErrorCode, Result};
-use crate::serialize::{decode_value, encode_input, encode_value, serialize_workflow_error, Format};
+use crate::serialize::{
+    decode_value, encode_input, encode_value, serialize_workflow_error, Format,
+};
 
 /// The authenticated identity carried by a workflow and inherited by its children.
 #[derive(Clone, Default)]
@@ -163,8 +165,7 @@ impl WorkflowContext {
                         rec.serialization.as_deref(),
                     ))));
                 }
-                let value =
-                    decode_value::<R>(rec.output.as_deref(), rec.serialization.as_deref())?;
+                let value = decode_value::<R>(rec.output.as_deref(), rec.serialization.as_deref())?;
                 Ok(Some(Ok(value)))
             }
         }
@@ -180,7 +181,10 @@ impl WorkflowContext {
         let fmt = Format::Portable;
         let (output, error) = match result {
             Ok(value) => (Some(encode_value(value, fmt)?), None),
-            Err(e) => (None, Some(serialize_workflow_error(&e.to_string(), None, fmt))),
+            Err(e) => (
+                None,
+                Some(serialize_workflow_error(&e.to_string(), None, fmt)),
+            ),
         };
         record_operation_result(
             &self.inner.pool,
@@ -505,9 +509,13 @@ impl WorkflowContext {
         let mut found: Option<(String, Option<String>)> = None;
         loop {
             let notified = notify.notified();
-            if let Some(ev) =
-                select_workflow_event(&self.inner.pool, &self.inner.schema, target_workflow_id, key)
-                    .await?
+            if let Some(ev) = select_workflow_event(
+                &self.inner.pool,
+                &self.inner.schema,
+                target_workflow_id,
+                key,
+            )
+            .await?
             {
                 found = Some(ev);
                 break;
@@ -551,8 +559,13 @@ impl WorkflowContext {
     /// Errors if the stream is already closed.
     pub async fn write_stream<V: Serialize>(&self, key: &str, value: V) -> Result<()> {
         let encoded = encode_value(&value, Format::Portable)?;
-        self.write_stream_raw(key, "DBOS.writeStream", &encoded, Some(Format::Portable.name()))
-            .await
+        self.write_stream_raw(
+            key,
+            "DBOS.writeStream",
+            &encoded,
+            Some(Format::Portable.name()),
+        )
+        .await
     }
 
     /// Close a stream, so readers stop once they reach this point.
@@ -699,6 +712,9 @@ fn decode_optional<M: DeserializeOwned>(rec: &RecordedOperation) -> Result<Optio
     }
     match &rec.output {
         None => Ok(None),
-        Some(out) => Ok(Some(decode_value::<M>(Some(out), rec.serialization.as_deref())?)),
+        Some(out) => Ok(Some(decode_value::<M>(
+            Some(out),
+            rec.serialization.as_deref(),
+        )?)),
     }
 }

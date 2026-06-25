@@ -166,7 +166,14 @@ impl Dbos {
         P: Serialize + Send,
     {
         let encoded = encode_input(&input, Format::Portable)?;
-        enqueue_workflow::<R>(self.inner.clone(), queue_name, workflow_name, Some(encoded), opts).await
+        enqueue_workflow::<R>(
+            self.inner.clone(),
+            queue_name,
+            workflow_name,
+            Some(encoded),
+            opts,
+        )
+        .await
     }
 
     /// Get a polling handle to an existing workflow by id.
@@ -203,7 +210,8 @@ impl Dbos {
     /// Cancel a workflow (move it to `CANCELLED`). Errors if it does not exist.
     pub async fn cancel_workflow(&self, workflow_id: &str) -> Result<()> {
         let ids = [workflow_id.to_string()];
-        let found = management::cancel_workflows(&self.inner.pool, &self.inner.schema, &ids).await?;
+        let found =
+            management::cancel_workflows(&self.inner.pool, &self.inner.schema, &ids).await?;
         if found.is_empty() {
             return Err(DbosError::non_existent_workflow(workflow_id));
         }
@@ -272,7 +280,8 @@ impl Dbos {
         key: &str,
         from_offset: i32,
     ) -> Result<(Vec<T>, bool)> {
-        self.read_stream_from(workflow_id, key, from_offset, true).await
+        self.read_stream_from(workflow_id, key, from_offset, true)
+            .await
     }
 
     async fn read_stream_from<T: DeserializeOwned>(
@@ -586,9 +595,9 @@ impl DbosBuilder {
         if admin_server {
             let admin_inner = inner.clone();
             let token = inner.cancel.clone();
-            inner
-                .workflow_tasks
-                .spawn(async move { admin::run_admin_server(admin_inner, admin_port, token).await });
+            inner.workflow_tasks.spawn(async move {
+                admin::run_admin_server(admin_inner, admin_port, token).await
+            });
         }
 
         Ok(Dbos { inner })

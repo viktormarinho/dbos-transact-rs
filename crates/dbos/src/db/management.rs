@@ -128,7 +128,9 @@ pub async fn list_workflows(
 
     if let Some(ids) = &filter.workflow_ids {
         connect(&mut qb);
-        qb.push("workflow_uuid = ANY(").push_bind(ids.clone()).push(")");
+        qb.push("workflow_uuid = ANY(")
+            .push_bind(ids.clone())
+            .push(")");
     }
     if let Some(st) = &status {
         if !st.is_empty() {
@@ -155,7 +157,9 @@ pub async fn list_workflows(
     if let Some(execs) = &filter.executor_ids {
         if !execs.is_empty() {
             connect(&mut qb);
-            qb.push("executor_id = ANY(").push_bind(execs.clone()).push(")");
+            qb.push("executor_id = ANY(")
+                .push_bind(execs.clone())
+                .push(")");
         }
     }
     if let Some(t) = filter.start_time {
@@ -193,7 +197,9 @@ pub async fn list_workflows(
             queue_name: r.try_get("queue_name")?,
             executor_id: r.try_get("executor_id")?,
             application_version: r.try_get("application_version")?,
-            recovery_attempts: r.try_get::<Option<i64>, _>("recovery_attempts")?.unwrap_or(0),
+            recovery_attempts: r
+                .try_get::<Option<i64>, _>("recovery_attempts")?
+                .unwrap_or(0),
             created_at: r.try_get("created_at")?,
             updated_at: r.try_get("updated_at")?,
             completed_at: r.try_get("completed_at")?,
@@ -202,7 +208,9 @@ pub async fn list_workflows(
             deduplication_id: r.try_get("deduplication_id")?,
             parent_workflow_id: r.try_get("parent_workflow_id")?,
             forked_from: r.try_get("forked_from")?,
-            was_forked_from: r.try_get::<Option<bool>, _>("was_forked_from")?.unwrap_or(false),
+            was_forked_from: r
+                .try_get::<Option<bool>, _>("was_forked_from")?
+                .unwrap_or(false),
             config_name: r.try_get("config_name")?,
             input: decode_input_opt(inputs.as_deref(), serialization.as_deref()),
             output: decode_value_opt(output.as_deref(), serialization.as_deref()),
@@ -351,7 +359,11 @@ pub async fn resume_workflows(
 
 /// Fork a workflow: create a new `ENQUEUED` workflow copying the original's input (and steps below
 /// `start_step`), so it re-runs from `start_step`. Returns the new workflow id.
-pub async fn fork_workflow(pool: &PgPool, schema: &str, input: ForkWorkflowInput) -> Result<String> {
+pub async fn fork_workflow(
+    pool: &PgPool,
+    schema: &str,
+    input: ForkWorkflowInput,
+) -> Result<String> {
     let prefix = schema_prefix(schema);
     let new_id = input
         .forked_workflow_id
@@ -381,8 +393,17 @@ pub async fn fork_workflow(pool: &PgPool, schema: &str, input: ForkWorkflowInput
     .bind(&input.original_workflow_id)
     .fetch_optional(pool)
     .await?;
-    let (name, auth_user, assumed_role, auth_roles, app_id, inputs, serialization, class_name, config_name) =
-        original.ok_or_else(|| DbosError::non_existent_workflow(&input.original_workflow_id))?;
+    let (
+        name,
+        auth_user,
+        assumed_role,
+        auth_roles,
+        app_id,
+        inputs,
+        serialization,
+        class_name,
+        config_name,
+    ) = original.ok_or_else(|| DbosError::non_existent_workflow(&input.original_workflow_id))?;
     let app_version = input.application_version.clone();
 
     let mut tx = pool.begin().await?;

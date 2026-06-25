@@ -41,7 +41,9 @@ pub async fn write_stream_entry(
     .fetch_optional(&mut *tx)
     .await?;
     if closed.is_some() {
-        return Err(DbosError::other(format!("stream '{key}' is already closed")));
+        return Err(DbosError::other(format!(
+            "stream '{key}' is already closed"
+        )));
     }
 
     sqlx::query(&format!(
@@ -120,10 +122,14 @@ pub async fn read_stream_blocking<T: DeserializeOwned>(
     let mut values = Vec::new();
     loop {
         let notified = notify.map(|n| n.notified());
-        let (entries, closed) = read_stream_entries(pool, schema, workflow_id, key, current).await?;
+        let (entries, closed) =
+            read_stream_entries(pool, schema, workflow_id, key, current).await?;
         let got = !entries.is_empty();
         for e in entries {
-            values.push(decode_value::<T>(Some(&e.value), e.serialization.as_deref())?);
+            values.push(decode_value::<T>(
+                Some(&e.value),
+                e.serialization.as_deref(),
+            )?);
             current = e.offset + 1;
         }
         if closed {

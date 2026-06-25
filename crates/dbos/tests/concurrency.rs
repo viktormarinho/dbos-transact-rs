@@ -53,7 +53,10 @@ async fn two_executors_run_one_queued_workflow_exactly_once() {
             "q",
             "task",
             21,
-            EnqueueOptions { workflow_id: Some("queued-1".into()), ..Default::default() },
+            EnqueueOptions {
+                workflow_id: Some("queued-1".into()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

@@ -28,7 +28,10 @@ fn config(schema: &str) -> Config {
 }
 
 async fn launch(schema: &str, build: impl FnOnce(DbosBuilder) -> DbosBuilder) -> Dbos {
-    build(Dbos::builder(config(schema))).launch().await.expect("launch")
+    build(Dbos::builder(config(schema)))
+        .launch()
+        .await
+        .expect("launch")
 }
 
 async fn pool() -> PgPool {
@@ -65,10 +68,12 @@ async fn does_not_migrate_a_ts_migrated_schema() {
     let schema = unique_schema("tsmig");
     let p = pool().await;
     dbos::db::run_migrations(&p, &schema).await.unwrap();
-    sqlx::query(&format!("UPDATE \"{schema}\".dbos_migrations SET version = 63"))
-        .execute(&p)
-        .await
-        .unwrap();
+    sqlx::query(&format!(
+        "UPDATE \"{schema}\".dbos_migrations SET version = 63"
+    ))
+    .execute(&p)
+    .await
+    .unwrap();
 
     // The port must NOT run its numbered migrations on a higher-versioned (TS) DB.
     assert!(
@@ -89,17 +94,30 @@ async fn does_not_migrate_a_ts_migrated_schema() {
 
     // Launch (which always calls run_migrations) leaves the TS version untouched and operates.
     let dbos = launch(&schema, |b| {
-        b.register_workflow("echo", |_: WorkflowContext, n: i64| async move { Ok::<_, DbosError>(n) })
+        b.register_workflow("echo", |_: WorkflowContext, n: i64| async move {
+            Ok::<_, DbosError>(n)
+        })
     })
     .await;
-    let version: i64 = sqlx::query_scalar(&format!("SELECT version FROM \"{schema}\".dbos_migrations"))
-        .fetch_one(&p)
-        .await
-        .unwrap();
-    assert_eq!(version, 63, "the port did not run its migrations over the TS schema");
+    let version: i64 =
+        sqlx::query_scalar(&format!("SELECT version FROM \"{schema}\".dbos_migrations"))
+            .fetch_one(&p)
+            .await
+            .unwrap();
+    assert_eq!(
+        version, 63,
+        "the port did not run its migrations over the TS schema"
+    );
 
     let h = dbos
-        .run_workflow::<_, i64>("echo", 5, WorkflowOptions { workflow_id: Some("ts-wf".into()), ..Default::default() })
+        .run_workflow::<_, i64>(
+            "echo",
+            5,
+            WorkflowOptions {
+                workflow_id: Some("ts-wf".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), 5);
@@ -156,7 +174,10 @@ async fn recovery_gated_by_executor_id_and_application_version() {
         "a TS-orphaned workflow is adopted when its executor id is supplied"
     );
     assert_eq!(
-        dbos.retrieve_workflow::<String>("diff_exec").get_result().await.unwrap(),
+        dbos.retrieve_workflow::<String>("diff_exec")
+            .get_result()
+            .await
+            .unwrap(),
         "done"
     );
 

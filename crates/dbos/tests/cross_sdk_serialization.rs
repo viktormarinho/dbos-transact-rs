@@ -22,10 +22,19 @@ fn decodes_real_ts_superjson_bytes() {
 
     // Scalars / containers pass through.
     assert_eq!(decode_value::<i64>(Some(&f["sj_int"]), sj).unwrap(), 42);
-    assert_eq!(decode_value::<String>(Some(&f["sj_string"]), sj).unwrap(), "hello");
+    assert_eq!(
+        decode_value::<String>(Some(&f["sj_string"]), sj).unwrap(),
+        "hello"
+    );
     assert!(decode_value::<bool>(Some(&f["sj_bool"]), sj).unwrap());
-    assert_eq!(decode_value::<Option<i64>>(Some(&f["sj_null"]), sj).unwrap(), None);
-    assert_eq!(decode_value::<Vec<i64>>(Some(&f["sj_array"]), sj).unwrap(), vec![1, 2, 3]);
+    assert_eq!(
+        decode_value::<Option<i64>>(Some(&f["sj_null"]), sj).unwrap(),
+        None
+    );
+    assert_eq!(
+        decode_value::<Vec<i64>>(Some(&f["sj_array"]), sj).unwrap(),
+        vec![1, 2, 3]
+    );
     assert_eq!(
         decode_value::<Value>(Some(&f["sj_object"]), sj).unwrap(),
         json!({"a":1,"b":{"c":"x"},"d":[true,null]})
@@ -44,9 +53,15 @@ fn decodes_real_ts_superjson_bytes() {
     );
     // Map -> object.
     let m: BTreeMap<String, i64> = decode_value(Some(&f["sj_map"]), sj).unwrap();
-    assert_eq!(m, BTreeMap::from([("a".to_string(), 1), ("b".to_string(), 2)]));
+    assert_eq!(
+        m,
+        BTreeMap::from([("a".to_string(), 1), ("b".to_string(), 2)])
+    );
     // Set -> array.
-    assert_eq!(decode_value::<Vec<i64>>(Some(&f["sj_set"]), sj).unwrap(), vec![1, 2, 3]);
+    assert_eq!(
+        decode_value::<Vec<i64>>(Some(&f["sj_set"]), sj).unwrap(),
+        vec![1, 2, 3]
+    );
 
     // Nested rich types.
     #[derive(Debug, PartialEq, Deserialize)]
@@ -56,7 +71,10 @@ fn decodes_real_ts_superjson_bytes() {
     }
     assert_eq!(
         decode_value::<WhenN>(Some(&f["sj_object_with_date"]), sj).unwrap(),
-        WhenN { when: "2024-01-02T03:04:05.000Z".to_string(), n: 5 }
+        WhenN {
+            when: "2024-01-02T03:04:05.000Z".to_string(),
+            n: 5
+        }
     );
 
     // undefined -> null (None).
@@ -77,7 +95,10 @@ fn decodes_legacy_dbosjson_rows_with_null_serialization() {
     // best-effort `None` fallback (must NOT be base64-decoded).
     let f = fixtures();
 
-    assert_eq!(decode_value::<i64>(Some(&f["legacy_int"]), None).unwrap(), 42);
+    assert_eq!(
+        decode_value::<i64>(Some(&f["legacy_int"]), None).unwrap(),
+        42
+    );
 
     #[derive(Debug, PartialEq, Deserialize)]
     struct When {
@@ -85,7 +106,9 @@ fn decodes_legacy_dbosjson_rows_with_null_serialization() {
     }
     assert_eq!(
         decode_value::<When>(Some(&f["legacy_object_with_date"]), None).unwrap(),
-        When { when: "2024-01-02T03:04:05.000Z".to_string() }
+        When {
+            when: "2024-01-02T03:04:05.000Z".to_string()
+        }
     );
 
     #[derive(Debug, PartialEq, Deserialize)]
@@ -94,6 +117,8 @@ fn decodes_legacy_dbosjson_rows_with_null_serialization() {
     }
     assert_eq!(
         decode_value::<Big>(Some(&f["legacy_object_with_bigint"]), None).unwrap(),
-        Big { big: 123456789012345 }
+        Big {
+            big: 123456789012345
+        }
     );
 }

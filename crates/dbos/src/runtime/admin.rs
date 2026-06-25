@@ -14,11 +14,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::recovery::recover_pending_workflows;
 use super::DbosInner;
+use super::WorkflowQueue;
 use crate::db::management::{
     self, ForkWorkflowInput, ListWorkflowsFilter, StepInfo, WorkflowStatus, INTERNAL_QUEUE_NAME,
 };
 use crate::db::status::WorkflowStatusType;
-use super::WorkflowQueue;
 
 type S = State<Arc<DbosInner>>;
 
@@ -76,11 +76,17 @@ async fn deactivate(State(inner): S) -> impl IntoResponse {
 async fn recovery(State(inner): S, body: String) -> impl IntoResponse {
     let executor_ids: Vec<String> = match serde_json::from_str(&body) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()).into_response(),
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()).into_response()
+        }
     };
     match recover_pending_workflows(inner.clone(), &executor_ids).await {
         Ok(ids) => (StatusCode::OK, Json(json!(ids))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Recovery failed: {e}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Recovery failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -98,7 +104,9 @@ struct RetentionReq {
 async fn garbage_collect(State(inner): S, body: String) -> impl IntoResponse {
     let req: RetentionReq = match parse_or_default(&body) {
         Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()).into_response(),
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()).into_response()
+        }
     };
     match management::garbage_collect(
         &inner.pool,
@@ -121,21 +129,33 @@ struct GlobalTimeoutReq {
 async fn global_timeout(State(inner): S, body: String) -> impl IntoResponse {
     let req: GlobalTimeoutReq = match serde_json::from_str(&body) {
         Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()).into_response(),
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()).into_response()
+        }
     };
-    match management::cancel_all_before(&inner.pool, &inner.schema, req.cutoff_epoch_timestamp_ms).await {
+    match management::cancel_all_before(&inner.pool, &inner.schema, req.cutoff_epoch_timestamp_ms)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Global timeout failed: {e}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Global timeout failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
 async fn list_workflows(State(inner): S, body: String) -> impl IntoResponse {
     let filter = match parse_filter(&body, false) {
         Ok(f) => f,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON input".to_string()).into_response(),
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid JSON input".to_string()).into_response()
+        }
     };
     match management::list_workflows(&inner.pool, &inner.schema, filter).await {
-        Ok(wfs) => Json(json!(wfs.iter().map(workflow_to_wire).collect::<Vec<_>>())).into_response(),
+        Ok(wfs) => {
+            Json(json!(wfs.iter().map(workflow_to_wire).collect::<Vec<_>>())).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -156,7 +176,9 @@ async fn get_workflow(State(inner): S, Path(id): Path<String>) -> impl IntoRespo
 
 async fn list_steps(State(inner): S, Path(id): Path<String>) -> impl IntoResponse {
     match management::get_workflow_steps(&inner.pool, &inner.schema, &id).await {
-        Ok(steps) => Json(json!(steps.iter().map(step_to_wire).collect::<Vec<_>>())).into_response(),
+        Ok(steps) => {
+            Json(json!(steps.iter().map(step_to_wire).collect::<Vec<_>>())).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -169,7 +191,8 @@ async fn cancel(State(inner): S, Path(id): Path<String>) -> impl IntoResponse {
 }
 
 async fn resume(State(inner): S, Path(id): Path<String>) -> impl IntoResponse {
-    match management::resume_workflows(&inner.pool, &inner.schema, &[id], INTERNAL_QUEUE_NAME).await {
+    match management::resume_workflows(&inner.pool, &inner.schema, &[id], INTERNAL_QUEUE_NAME).await
+    {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -185,7 +208,9 @@ struct ForkReq {
 async fn fork(State(inner): S, Path(id): Path<String>, body: String) -> impl IntoResponse {
     let req: ForkReq = match parse_or_default(&body) {
         Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON input".to_string()).into_response(),
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "Invalid JSON input".to_string()).into_response()
+        }
     };
     let input = ForkWorkflowInput {
         original_workflow_id: id,
@@ -239,13 +264,24 @@ fn parse_filter(body: &str, queues_only: bool) -> Result<ListWorkflowsFilter, ()
     };
     Ok(ListWorkflowsFilter {
         workflow_ids: v.get("workflow_uuids").and_then(Value::as_array).map(|a| {
-            a.iter().filter_map(|x| x.as_str().map(String::from)).collect()
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
         }),
         status,
-        workflow_name: v.get("workflow_name").and_then(Value::as_str).map(String::from),
-        queue_name: v.get("queue_name").and_then(Value::as_str).map(String::from),
+        workflow_name: v
+            .get("workflow_name")
+            .and_then(Value::as_str)
+            .map(String::from),
+        queue_name: v
+            .get("queue_name")
+            .and_then(Value::as_str)
+            .map(String::from),
         queues_only,
-        application_version: v.get("application_version").and_then(Value::as_str).map(String::from),
+        application_version: v
+            .get("application_version")
+            .and_then(Value::as_str)
+            .map(String::from),
         executor_ids: None,
         start_time: iso("start_time"),
         end_time: iso("end_time"),
@@ -268,9 +304,15 @@ fn queue_to_wire(q: &WorkflowQueue) -> Value {
         o.insert("priorityEnabled".into(), json!(true));
     }
     if let Some(r) = &q.rate_limit {
-        o.insert("rateLimit".into(), json!({ "Limit": r.limit, "Period": r.period.as_secs_f64() }));
+        o.insert(
+            "rateLimit".into(),
+            json!({ "Limit": r.limit, "Period": r.period.as_secs_f64() }),
+        );
     }
-    o.insert("maxTasksPerIteration".into(), json!(q.max_tasks_per_iteration));
+    o.insert(
+        "maxTasksPerIteration".into(),
+        json!(q.max_tasks_per_iteration),
+    );
     if q.partition_queue {
         o.insert("partitionQueue".into(), json!(true));
     }
@@ -345,7 +387,10 @@ fn step_to_wire(s: &StepInfo) -> Value {
         o.insert("completed_at_epoch_ms".into(), json!(t));
     }
     if let Some(e) = &s.error {
-        o.insert("error".into(), json!(serde_json::to_string(e).unwrap_or_default()));
+        o.insert(
+            "error".into(),
+            json!(serde_json::to_string(e).unwrap_or_default()),
+        );
     }
     Value::Object(o)
 }

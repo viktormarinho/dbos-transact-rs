@@ -44,7 +44,12 @@ impl Client {
     }
 
     fn handle<R>(&self, id: String) -> WorkflowHandle<R> {
-        WorkflowHandle::polling(id, self.pool.clone(), self.schema.clone(), self.poll_interval)
+        WorkflowHandle::polling(
+            id,
+            self.pool.clone(),
+            self.schema.clone(),
+            self.poll_interval,
+        )
     }
 
     /// Enqueue a workflow (by name) onto a queue. A DBOS server with that workflow registered will
@@ -159,7 +164,8 @@ impl Client {
     pub async fn resume_workflow<R>(&self, workflow_id: &str) -> Result<WorkflowHandle<R>> {
         let ids = [workflow_id.to_string()];
         let found =
-            management::resume_workflows(&self.pool, &self.schema, &ids, INTERNAL_QUEUE_NAME).await?;
+            management::resume_workflows(&self.pool, &self.schema, &ids, INTERNAL_QUEUE_NAME)
+                .await?;
         if found.is_empty() {
             return Err(DbosError::non_existent_workflow(workflow_id));
         }

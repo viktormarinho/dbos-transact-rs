@@ -65,7 +65,9 @@ fn encode_segment(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -126,10 +128,11 @@ async fn connect_and_serve(
     ws_url: &str,
     token: &CancellationToken,
 ) -> std::result::Result<(), String> {
-    let (ws_stream, _) = tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::connect_async(ws_url))
-        .await
-        .map_err(|_| "handshake timeout".to_string())?
-        .map_err(|e| format!("connect failed: {e}"))?;
+    let (ws_stream, _) =
+        tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::connect_async(ws_url))
+            .await
+            .map_err(|_| "handshake timeout".to_string())?
+            .map_err(|e| format!("connect failed: {e}"))?;
     tracing::info!(app = %config.app_name, "conductor connected");
 
     let (mut sink, mut stream) = ws_stream.split();
@@ -180,8 +183,16 @@ async fn handle_message(
     text: &str,
 ) -> Option<String> {
     let msg: Value = serde_json::from_str(text).ok()?;
-    let msg_type = msg.get("type").and_then(Value::as_str).unwrap_or("").to_string();
-    let request_id = msg.get("request_id").and_then(Value::as_str).unwrap_or("").to_string();
+    let msg_type = msg
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let request_id = msg
+        .get("request_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut resp = json!({ "type": msg_type, "request_id": request_id });
 
     match msg_type.as_str() {
@@ -199,18 +210,27 @@ async fn handle_message(
         }
         "recovery" => {
             let execs = string_list(msg.get("executor_ids"));
-            let r = recover_pending_workflows(inner.clone(), &execs).await.map(|_| ());
+            let r = recover_pending_workflows(inner.clone(), &execs)
+                .await
+                .map(|_| ());
             set_success(&mut resp, r);
         }
         "cancel" => {
             let ids = coalesce_ids(&msg);
-            let r = management::cancel_workflows(&inner.pool, &inner.schema, &ids).await.map(|_| ());
+            let r = management::cancel_workflows(&inner.pool, &inner.schema, &ids)
+                .await
+                .map(|_| ());
             set_success(&mut resp, r);
         }
         "resume" => {
             let ids = coalesce_ids(&msg);
-            let queue = msg.get("queue_name").and_then(Value::as_str).unwrap_or(INTERNAL_QUEUE_NAME);
-            let r = management::resume_workflows(&inner.pool, &inner.schema, &ids, queue).await.map(|_| ());
+            let queue = msg
+                .get("queue_name")
+                .and_then(Value::as_str)
+                .unwrap_or(INTERNAL_QUEUE_NAME);
+            let r = management::resume_workflows(&inner.pool, &inner.schema, &ids, queue)
+                .await
+                .map(|_| ());
             set_success(&mut resp, r);
         }
         "list_workflows" => {
@@ -222,7 +242,11 @@ async fn handle_message(
             set_output(&mut resp, list_to_wire(inner, filter).await);
         }
         "get_workflow" => {
-            let id = msg.get("workflow_id").and_then(Value::as_str).unwrap_or("").to_string();
+            let id = msg
+                .get("workflow_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let filter = ListWorkflowsFilter {
                 workflow_ids: Some(vec![id]),
                 ..Default::default()
@@ -246,12 +270,28 @@ async fn handle_message(
         "fork_workflow" => {
             let body = msg.get("body").cloned().unwrap_or(Value::Null);
             let input = ForkWorkflowInput {
-                original_workflow_id: body.get("workflow_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                original_workflow_id: body
+                    .get("workflow_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 start_step: body.get("start_step").and_then(Value::as_i64).unwrap_or(0) as i32,
-                forked_workflow_id: body.get("new_workflow_id").and_then(Value::as_str).map(String::from),
-                application_version: body.get("application_version").and_then(Value::as_str).map(String::from),
-                queue_name: body.get("queue_name").and_then(Value::as_str).map(String::from),
-                queue_partition_key: body.get("queue_partition_key").and_then(Value::as_str).map(String::from),
+                forked_workflow_id: body
+                    .get("new_workflow_id")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                application_version: body
+                    .get("application_version")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                queue_name: body
+                    .get("queue_name")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                queue_partition_key: body
+                    .get("queue_partition_key")
+                    .and_then(Value::as_str)
+                    .map(String::from),
             };
             match management::fork_workflow(&inner.pool, &inner.schema, input).await {
                 Ok(new_id) => resp["new_workflow_id"] = json!(new_id),
@@ -259,8 +299,16 @@ async fn handle_message(
             }
         }
         "exist_pending_workflows" => {
-            let exec = msg.get("executor_id").and_then(Value::as_str).unwrap_or("").to_string();
-            let ver = msg.get("application_version").and_then(Value::as_str).unwrap_or("").to_string();
+            let exec = msg
+                .get("executor_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let ver = msg
+                .get("application_version")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let filter = ListWorkflowsFilter {
                 status: Some(vec![WorkflowStatusType::Pending]),
                 executor_ids: Some(vec![exec]),
@@ -280,7 +328,8 @@ async fn handle_message(
             let timeout_cutoff = body.get("timeout_cutoff_epoch_ms").and_then(Value::as_i64);
             let mut r: Result<()> = Ok(());
             if gc_cutoff.is_some() || gc_rows.is_some() {
-                r = management::garbage_collect(&inner.pool, &inner.schema, gc_cutoff, gc_rows).await;
+                r = management::garbage_collect(&inner.pool, &inner.schema, gc_cutoff, gc_rows)
+                    .await;
             }
             if r.is_ok() {
                 if let Some(tc) = timeout_cutoff {
@@ -330,7 +379,10 @@ fn set_success(resp: &mut Value, r: Result<()>) {
 fn string_list(v: Option<&Value>) -> Vec<String> {
     match v {
         Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -353,12 +405,19 @@ fn status_list(v: Option<&Value>) -> Option<Vec<WorkflowStatusType>> {
     if names.is_empty() {
         return None;
     }
-    Some(names.iter().filter_map(|s| WorkflowStatusType::from_str(s)).collect())
+    Some(
+        names
+            .iter()
+            .filter_map(|s| WorkflowStatusType::from_str(s))
+            .collect(),
+    )
 }
 
 fn iso_to_ms(v: Option<&Value>) -> Option<i64> {
     let s = v?.as_str()?;
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp_millis())
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
 }
 
 /// `workflow_ids` if non-empty, else `[workflow_id]`.
@@ -380,7 +439,10 @@ fn parse_list_filter(body: Option<&Value>, queues_only: bool) -> ListWorkflowsFi
         status: status_list(b.get("status")),
         workflow_name: first_string(b.get("workflow_name")),
         queue_name: first_string(b.get("queue_name")),
-        queues_only: queues_only || b.get("queues_only").and_then(Value::as_bool).unwrap_or(false),
+        queues_only: queues_only
+            || b.get("queues_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         application_version: first_string(b.get("application_version")),
         executor_ids: array_or_none(b.get("executor_id")),
         start_time: iso_to_ms(b.get("start_time")),

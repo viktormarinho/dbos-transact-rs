@@ -58,7 +58,14 @@ async fn durable_sleep_waits() {
 
     let start = Instant::now();
     let h = dbos
-        .run_workflow::<_, String>("napper", (), WorkflowOptions { workflow_id: Some("nap-1".into()), ..Default::default() })
+        .run_workflow::<_, String>(
+            "napper",
+            (),
+            WorkflowOptions {
+                workflow_id: Some("nap-1".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), "awake");
@@ -89,15 +96,19 @@ async fn cron_scheduler_fires_each_tick() {
     let ticks2 = ticks.clone();
 
     let dbos = launch(&schema, move |b| {
-        b.register_scheduled("every_second", "* * * * * *", move |_ctx: WorkflowContext, input: ScheduledWorkflowInput| {
-            let count = count2.clone();
-            let ticks = ticks2.clone();
-            async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                ticks.lock().unwrap().push(input.scheduled_time.timestamp());
-                Ok::<_, DbosError>(())
-            }
-        })
+        b.register_scheduled(
+            "every_second",
+            "* * * * * *",
+            move |_ctx: WorkflowContext, input: ScheduledWorkflowInput| {
+                let count = count2.clone();
+                let ticks = ticks2.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    ticks.lock().unwrap().push(input.scheduled_time.timestamp());
+                    Ok::<_, DbosError>(())
+                }
+            },
+        )
     })
     .await;
 
@@ -105,10 +116,17 @@ async fn cron_scheduler_fires_each_tick() {
     dbos.shutdown(Duration::from_secs(2)).await;
 
     let fired = count.load(Ordering::SeqCst);
-    assert!(fired >= 2, "expected the schedule to fire at least twice, got {fired}");
+    assert!(
+        fired >= 2,
+        "expected the schedule to fire at least twice, got {fired}"
+    );
 
     // Each tick has a distinct scheduled time (exactly-once per tick).
     let t = ticks.lock().unwrap().clone();
     let distinct: HashSet<i64> = t.iter().copied().collect();
-    assert_eq!(distinct.len(), t.len(), "each scheduled tick is distinct: {t:?}");
+    assert_eq!(
+        distinct.len(),
+        t.len(),
+        "each scheduled tick is distinct: {t:?}"
+    );
 }

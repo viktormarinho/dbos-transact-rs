@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbos::{Config, Dbos, DbosBuilder, DbosErrorCode, StepOptions, WorkflowContext, WorkflowOptions};
+use dbos::{
+    Config, Dbos, DbosBuilder, DbosErrorCode, StepOptions, WorkflowContext, WorkflowOptions,
+};
 
 fn test_url() -> String {
     std::env::var("DBOS_SYSTEM_DATABASE_URL")
@@ -196,7 +198,8 @@ async fn step_exhausts_retries() {
         .unwrap();
     let err = handle.get_result().await.unwrap_err();
     assert!(
-        err.to_string().contains("exceeded its maximum of 2 retries"),
+        err.to_string()
+            .contains("exceeded its maximum of 2 retries"),
         "unexpected error: {err}"
     );
     dbos.shutdown(Duration::from_secs(2)).await;

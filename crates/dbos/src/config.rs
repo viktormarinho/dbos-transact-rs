@@ -245,7 +245,11 @@ pub fn process_config(cfg: Config) -> Result<ProcessedConfig> {
 /// error strings match the Go reference exactly.
 pub fn process_config_with_env(cfg: Config, env: &dyn EnvSource) -> Result<ProcessedConfig> {
     // 1) A database source must be provided (checked before app_name, matching Go).
-    let has_url = cfg.database_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+    let has_url = cfg
+        .database_url
+        .as_deref()
+        .map(|u| !u.is_empty())
+        .unwrap_or(false);
     if !has_url && cfg.system_db_pool.is_none() {
         return Err(DbosError::initialization(
             "one of databaseURL, systemDBPool, or sqliteSystemDB must be provided",
@@ -359,7 +363,9 @@ mod tests {
         assert!(detect_dialect("mysql://h/d")
             .unwrap_err()
             .contains("unsupported database scheme"));
-        assert!(detect_dialect("justastring").unwrap_err().contains("no scheme"));
+        assert!(detect_dialect("justastring")
+            .unwrap_err()
+            .contains("no scheme"));
         assert!(detect_dialect("foo=bar host=localhost")
             .unwrap_err()
             .contains("no scheme"));

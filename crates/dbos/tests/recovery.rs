@@ -254,7 +254,10 @@ async fn recovery_runs_workflow_with_no_recorded_steps() {
     .await;
 
     // Learn this executor's id + application version.
-    let warm = dbos.run_workflow::<_, i64>("w", (), WorkflowOptions::default()).await.unwrap();
+    let warm = dbos
+        .run_workflow::<_, i64>("w", (), WorkflowOptions::default())
+        .await
+        .unwrap();
     assert_eq!(warm.get_result().await.unwrap(), 7);
     let (executor, appver): (String, String) = sqlx::query_as(&format!(
         "SELECT executor_id, application_version FROM \"{schema}\".workflow_status WHERE workflow_uuid = $1"
@@ -263,7 +266,11 @@ async fn recovery_runs_workflow_with_no_recorded_steps() {
     .fetch_one(&pool().await)
     .await
     .unwrap();
-    assert_eq!(step_runs.load(Ordering::SeqCst), 1, "warm run executed its step once");
+    assert_eq!(
+        step_runs.load(Ordering::SeqCst),
+        1,
+        "warm run executed its step once"
+    );
 
     // Forge a PENDING row with NO operation_outputs (crashed right after the insert).
     let crashed = "crashed-pre-step";
@@ -283,10 +290,17 @@ async fn recovery_runs_workflow_with_no_recorded_steps() {
 
     dbos.recover_pending_workflows().await.unwrap();
     assert_eq!(
-        dbos.retrieve_workflow::<i64>(crashed).get_result().await.unwrap(),
+        dbos.retrieve_workflow::<i64>(crashed)
+            .get_result()
+            .await
+            .unwrap(),
         7
     );
-    assert_eq!(step_runs.load(Ordering::SeqCst), 2, "the recovered workflow executed its step once");
+    assert_eq!(
+        step_runs.load(Ordering::SeqCst),
+        2,
+        "the recovered workflow executed its step once"
+    );
     assert_eq!(recovery_attempts(&schema, crashed).await, 2);
 
     // Exactly one step recorded for the recovered workflow.

@@ -48,15 +48,24 @@ async fn list_workflows_and_steps() {
     let schema = unique_schema("mgmt_list");
     let dbos = launch(&schema, |b| {
         b.register_workflow("stepper", |ctx: WorkflowContext, _: ()| async move {
-            ctx.run_step("s1", |_| async { Ok::<_, DbosError>(1) }).await?;
-            ctx.run_step("s2", |_| async { Ok::<_, DbosError>(2) }).await?;
+            ctx.run_step("s1", |_| async { Ok::<_, DbosError>(1) })
+                .await?;
+            ctx.run_step("s2", |_| async { Ok::<_, DbosError>(2) })
+                .await?;
             Ok::<_, DbosError>(3)
         })
     })
     .await;
 
     let h = dbos
-        .run_workflow::<_, i64>("stepper", (), WorkflowOptions { workflow_id: Some("list-target".into()), ..Default::default() })
+        .run_workflow::<_, i64>(
+            "stepper",
+            (),
+            WorkflowOptions {
+                workflow_id: Some("list-target".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), 3);
@@ -69,7 +78,10 @@ async fn list_workflows_and_steps() {
     assert_eq!(listed[0].output, Some(serde_json::json!(3)));
 
     let steps = dbos.list_workflow_steps("list-target").await.unwrap();
-    let names: Vec<(i32, &str)> = steps.iter().map(|s| (s.step_id, s.step_name.as_str())).collect();
+    let names: Vec<(i32, &str)> = steps
+        .iter()
+        .map(|s| (s.step_id, s.step_name.as_str()))
+        .collect();
     assert_eq!(names, vec![(0, "s1"), (1, "s2")]);
 
     dbos.shutdown(Duration::from_secs(2)).await;
@@ -88,11 +100,22 @@ async fn cancel_then_resume() {
     .await;
 
     let h = dbos
-        .enqueue::<_, String>("q", "task", (), EnqueueOptions { workflow_id: Some("cr-1".into()), ..Default::default() })
+        .enqueue::<_, String>(
+            "q",
+            "task",
+            (),
+            EnqueueOptions {
+                workflow_id: Some("cr-1".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     dbos.cancel_workflow("cr-1").await.unwrap();
-    assert_eq!(h.get_status().await.unwrap(), Some(WorkflowStatusType::Cancelled));
+    assert_eq!(
+        h.get_status().await.unwrap(),
+        Some(WorkflowStatusType::Cancelled)
+    );
 
     // Resume re-enqueues onto the internal queue, whose runner executes it to completion.
     let resumed: dbos::WorkflowHandle<String> = dbos.resume_workflow("cr-1").await.unwrap();
@@ -121,13 +144,17 @@ async fn fork_replays_copied_steps() {
                 let av = ctx
                     .run_step("a", {
                         let a = a.clone();
-                        move |_| async move { Ok::<_, DbosError>(a.fetch_add(1, Ordering::SeqCst) as i64 + 1) }
+                        move |_| async move {
+                            Ok::<_, DbosError>(a.fetch_add(1, Ordering::SeqCst) as i64 + 1)
+                        }
                     })
                     .await?;
                 let bv = ctx
                     .run_step("b", {
                         let b = b.clone();
-                        move |_| async move { Ok::<_, DbosError>(b.fetch_add(1, Ordering::SeqCst) as i64 + 1) }
+                        move |_| async move {
+                            Ok::<_, DbosError>(b.fetch_add(1, Ordering::SeqCst) as i64 + 1)
+                        }
                     })
                     .await?;
                 Ok::<_, DbosError>(av * 10 + bv)
@@ -137,7 +164,14 @@ async fn fork_replays_copied_steps() {
     .await;
 
     let h = dbos
-        .run_workflow::<_, i64>("forkable", (), WorkflowOptions { workflow_id: Some("fork-src".into()), ..Default::default() })
+        .run_workflow::<_, i64>(
+            "forkable",
+            (),
+            WorkflowOptions {
+                workflow_id: Some("fork-src".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(h.get_result().await.unwrap(), 11); // a=1, b=1
@@ -153,8 +187,16 @@ async fn fork_replays_copied_steps() {
         })
         .await
         .unwrap();
-    assert_eq!(forked.get_result().await.unwrap(), 12, "a replayed (1), b re-ran (2)");
-    assert_eq!(a.load(Ordering::SeqCst), 1, "step a was replayed, not re-executed");
+    assert_eq!(
+        forked.get_result().await.unwrap(),
+        12,
+        "a replayed (1), b re-ran (2)"
+    );
+    assert_eq!(
+        a.load(Ordering::SeqCst),
+        1,
+        "step a was replayed, not re-executed"
+    );
     assert_eq!(b.load(Ordering::SeqCst), 2, "step b re-ran once more");
 
     dbos.shutdown(Duration::from_secs(3)).await;
@@ -175,15 +217,20 @@ async fn external_client_enqueue_and_manage() {
     // An external client connects to the same system database (no migrations, no tasks).
     let client = Client::connect(&test_url(), &schema).await.unwrap();
     let handle = client
-        .enqueue("q", "double", 21, EnqueueOptions { workflow_id: Some("client-wf".into()), ..Default::default() })
+        .enqueue(
+            "q",
+            "double",
+            21,
+            EnqueueOptions {
+                workflow_id: Some("client-wf".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(handle.get_result().await.unwrap(), serde_json::json!(42));
 
-    let listed = client
-        .list_workflows(ids(&["client-wf"]))
-        .await
-        .unwrap();
+    let listed = client.list_workflows(ids(&["client-wf"])).await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].status, WorkflowStatusType::Success);
 

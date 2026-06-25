@@ -37,7 +37,9 @@ pub async fn insert_notification(
     .await;
     match res {
         Ok(_) => Ok(()),
-        Err(e) if is_foreign_key_violation(&e) => Err(DbosError::non_existent_workflow(destination_id)),
+        Err(e) if is_foreign_key_violation(&e) => {
+            Err(DbosError::non_existent_workflow(destination_id))
+        }
         Err(e) => Err(e.into()),
     }
 }

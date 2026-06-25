@@ -125,7 +125,11 @@ fn dec_worker(inner: &DbosInner, key: &(String, String)) {
 
 /// The per-queue poll loop: promote delayed work, dequeue per partition, dispatch, and adapt the
 /// polling interval. Stops when `token` is cancelled.
-pub(crate) async fn run_queue(inner: Arc<DbosInner>, queue: WorkflowQueue, token: CancellationToken) {
+pub(crate) async fn run_queue(
+    inner: Arc<DbosInner>,
+    queue: WorkflowQueue,
+    token: CancellationToken,
+) {
     let mut interval = queue.base_polling;
     loop {
         let jitter = 0.95 + rand::random::<f64>() * 0.10;

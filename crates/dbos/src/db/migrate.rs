@@ -76,51 +76,201 @@ fn render_first_rest(template: &str, first: &str, rest: &str) -> String {
 
 // Embedded Postgres migration files (cockroach/sqlite variants are intentionally excluded).
 const M1_SCHEMA: &str = include_str!("../../migrations/1_initial_dbos_schema.sql");
-const M1_LISTEN_NOTIFY: &str = include_str!("../../migrations/1_initial_dbos_schema_listen_notify.sql");
+const M1_LISTEN_NOTIFY: &str =
+    include_str!("../../migrations/1_initial_dbos_schema_listen_notify.sql");
 const M10: &str = include_str!("../../migrations/10_add_notifications_pkey.sql");
 const M38_BASE: &str = include_str!("../../migrations/38_update_enqueue_workflow.sql");
-const M38_SEARCH_PATH: &str = include_str!("../../migrations/38_set_enqueue_workflow_search_path.sql");
+const M38_SEARCH_PATH: &str =
+    include_str!("../../migrations/38_set_enqueue_workflow_search_path.sql");
 
 /// Versions 2–9, 11–37, 39, 40 (everything except the multi-file/special versions 1, 10, 38).
 /// `(version, template, online)`.
 const SIMPLE: &[(i64, &str, bool)] = &[
-    (2, include_str!("../../migrations/2_add_queue_partition_key.sql"), false),
-    (3, include_str!("../../migrations/3_add_workflow_status_index.sql"), false),
-    (4, include_str!("../../migrations/4_add_forked_from.sql"), false),
-    (5, include_str!("../../migrations/5_add_step_timestamps.sql"), false),
-    (6, include_str!("../../migrations/6_add_workflow_events_history.sql"), false),
-    (7, include_str!("../../migrations/7_add_owner_xid.sql"), false),
-    (8, include_str!("../../migrations/8_add_parent_workflow_id.sql"), false),
-    (9, include_str!("../../migrations/9_add_workflow_schedules.sql"), false),
-    (11, include_str!("../../migrations/11_add_serialization_columns.sql"), false),
-    (12, include_str!("../../migrations/12_add_notifications_consumed.sql"), false),
-    (13, include_str!("../../migrations/13_add_application_versions.sql"), false),
-    (14, include_str!("../../migrations/14_add_pgsql_client_functions.sql"), false),
-    (15, include_str!("../../migrations/15_add_workflow_schedule_columns.sql"), false),
-    (16, include_str!("../../migrations/16_add_delay_until.sql"), false),
-    (17, include_str!("../../migrations/17_add_workflow_schedule_queue_name.sql"), false),
-    (18, include_str!("../../migrations/18_add_was_forked_from.sql"), false),
-    (19, include_str!("../../migrations/19_add_operation_outputs_completed_at_index.sql"), false),
-    (20, include_str!("../../migrations/20_set_function_search_path.sql"), false),
-    (21, include_str!("../../migrations/21_create_queues_table.sql"), false),
-    (22, include_str!("../../migrations/22_drop_forked_from_index.sql"), true),
-    (23, include_str!("../../migrations/23_create_partial_forked_from_index.sql"), true),
-    (24, include_str!("../../migrations/24_drop_parent_workflow_id_index.sql"), true),
-    (25, include_str!("../../migrations/25_create_partial_parent_workflow_id_index.sql"), true),
-    (26, include_str!("../../migrations/26_drop_executor_id_index.sql"), true),
-    (27, include_str!("../../migrations/27_create_partial_dedup_id_index.sql"), true),
-    (28, include_str!("../../migrations/28_drop_dedup_id_constraint.sql"), false),
-    (29, include_str!("../../migrations/29_create_pending_index.sql"), true),
-    (30, include_str!("../../migrations/30_create_failed_index.sql"), true),
-    (31, include_str!("../../migrations/31_drop_status_index.sql"), true),
-    (32, include_str!("../../migrations/32_create_in_flight_index.sql"), true),
-    (33, include_str!("../../migrations/33_add_rate_limited.sql"), false),
-    (34, include_str!("../../migrations/34_create_rate_limited_index.sql"), true),
-    (35, include_str!("../../migrations/35_drop_queue_status_started_index.sql"), true),
-    (36, include_str!("../../migrations/36_add_completed_at.sql"), false),
-    (37, include_str!("../../migrations/37_create_started_at_index.sql"), true),
-    (39, include_str!("../../migrations/39_create_streams_trigger.sql"), false),
-    (40, include_str!("../../migrations/40_add_attributes.sql"), false),
+    (
+        2,
+        include_str!("../../migrations/2_add_queue_partition_key.sql"),
+        false,
+    ),
+    (
+        3,
+        include_str!("../../migrations/3_add_workflow_status_index.sql"),
+        false,
+    ),
+    (
+        4,
+        include_str!("../../migrations/4_add_forked_from.sql"),
+        false,
+    ),
+    (
+        5,
+        include_str!("../../migrations/5_add_step_timestamps.sql"),
+        false,
+    ),
+    (
+        6,
+        include_str!("../../migrations/6_add_workflow_events_history.sql"),
+        false,
+    ),
+    (
+        7,
+        include_str!("../../migrations/7_add_owner_xid.sql"),
+        false,
+    ),
+    (
+        8,
+        include_str!("../../migrations/8_add_parent_workflow_id.sql"),
+        false,
+    ),
+    (
+        9,
+        include_str!("../../migrations/9_add_workflow_schedules.sql"),
+        false,
+    ),
+    (
+        11,
+        include_str!("../../migrations/11_add_serialization_columns.sql"),
+        false,
+    ),
+    (
+        12,
+        include_str!("../../migrations/12_add_notifications_consumed.sql"),
+        false,
+    ),
+    (
+        13,
+        include_str!("../../migrations/13_add_application_versions.sql"),
+        false,
+    ),
+    (
+        14,
+        include_str!("../../migrations/14_add_pgsql_client_functions.sql"),
+        false,
+    ),
+    (
+        15,
+        include_str!("../../migrations/15_add_workflow_schedule_columns.sql"),
+        false,
+    ),
+    (
+        16,
+        include_str!("../../migrations/16_add_delay_until.sql"),
+        false,
+    ),
+    (
+        17,
+        include_str!("../../migrations/17_add_workflow_schedule_queue_name.sql"),
+        false,
+    ),
+    (
+        18,
+        include_str!("../../migrations/18_add_was_forked_from.sql"),
+        false,
+    ),
+    (
+        19,
+        include_str!("../../migrations/19_add_operation_outputs_completed_at_index.sql"),
+        false,
+    ),
+    (
+        20,
+        include_str!("../../migrations/20_set_function_search_path.sql"),
+        false,
+    ),
+    (
+        21,
+        include_str!("../../migrations/21_create_queues_table.sql"),
+        false,
+    ),
+    (
+        22,
+        include_str!("../../migrations/22_drop_forked_from_index.sql"),
+        true,
+    ),
+    (
+        23,
+        include_str!("../../migrations/23_create_partial_forked_from_index.sql"),
+        true,
+    ),
+    (
+        24,
+        include_str!("../../migrations/24_drop_parent_workflow_id_index.sql"),
+        true,
+    ),
+    (
+        25,
+        include_str!("../../migrations/25_create_partial_parent_workflow_id_index.sql"),
+        true,
+    ),
+    (
+        26,
+        include_str!("../../migrations/26_drop_executor_id_index.sql"),
+        true,
+    ),
+    (
+        27,
+        include_str!("../../migrations/27_create_partial_dedup_id_index.sql"),
+        true,
+    ),
+    (
+        28,
+        include_str!("../../migrations/28_drop_dedup_id_constraint.sql"),
+        false,
+    ),
+    (
+        29,
+        include_str!("../../migrations/29_create_pending_index.sql"),
+        true,
+    ),
+    (
+        30,
+        include_str!("../../migrations/30_create_failed_index.sql"),
+        true,
+    ),
+    (
+        31,
+        include_str!("../../migrations/31_drop_status_index.sql"),
+        true,
+    ),
+    (
+        32,
+        include_str!("../../migrations/32_create_in_flight_index.sql"),
+        true,
+    ),
+    (
+        33,
+        include_str!("../../migrations/33_add_rate_limited.sql"),
+        false,
+    ),
+    (
+        34,
+        include_str!("../../migrations/34_create_rate_limited_index.sql"),
+        true,
+    ),
+    (
+        35,
+        include_str!("../../migrations/35_drop_queue_status_started_index.sql"),
+        true,
+    ),
+    (
+        36,
+        include_str!("../../migrations/36_add_completed_at.sql"),
+        false,
+    ),
+    (
+        37,
+        include_str!("../../migrations/37_create_started_at_index.sql"),
+        true,
+    ),
+    (
+        39,
+        include_str!("../../migrations/39_create_streams_trigger.sql"),
+        false,
+    ),
+    (
+        40,
+        include_str!("../../migrations/40_add_attributes.sql"),
+        false,
+    ),
 ];
 
 /// Build the ordered list of migrations rendered for `schema`.
@@ -142,7 +292,11 @@ fn build_migrations(schema: &str) -> Vec<Migration> {
         } else {
             render_uniform(template, &s)
         };
-        migrations.push(Migration { version, sql, online });
+        migrations.push(Migration {
+            version,
+            sql,
+            online,
+        });
     }
 
     // v10: the catalog comparison uses the RAW schema string; the ALTER uses the sanitized one.
@@ -256,10 +410,11 @@ async fn read_version_opt<'e, E: sqlx::PgExecutor<'e>>(
     schema: &str,
 ) -> Result<Option<i64>> {
     let sanitized = sanitize_ident(schema);
-    let v: Option<i64> =
-        sqlx::query_scalar(&format!("SELECT version FROM {sanitized}.{MIGRATIONS_TABLE} LIMIT 1"))
-            .fetch_optional(exec)
-            .await?;
+    let v: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT version FROM {sanitized}.{MIGRATIONS_TABLE} LIMIT 1"
+    ))
+    .fetch_optional(exec)
+    .await?;
     Ok(v)
 }
 
@@ -286,7 +441,11 @@ async fn write_version<'e, E: sqlx::PgExecutor<'e>>(
 
 /// Drop indexes left `indisvalid = false` by a crashed `CREATE INDEX CONCURRENTLY`, so the
 /// following online migration can rebuild them. Runs in autocommit (the drops are `CONCURRENTLY`).
-async fn cleanup_invalid_indexes(pool: &PgPool, schema: &str, sanitized_schema: &str) -> Result<()> {
+async fn cleanup_invalid_indexes(
+    pool: &PgPool,
+    schema: &str,
+    sanitized_schema: &str,
+) -> Result<()> {
     let names: Vec<String> = sqlx::query_scalar(
         "SELECT i.relname \
          FROM pg_index ix \
@@ -365,7 +524,11 @@ mod tests {
         run_migrations(&pool, &schema).await.unwrap();
 
         assert_eq!(read_version(&pool, &schema).await.unwrap(), 40);
-        assert_eq!(version_row_count(&pool, &schema).await, 1, "exactly one version row");
+        assert_eq!(
+            version_row_count(&pool, &schema).await,
+            1,
+            "exactly one version row"
+        );
 
         // A representative set of tables and pg functions from across the migrations.
         for t in [
@@ -379,8 +542,15 @@ mod tests {
         ] {
             assert!(table_exists(&pool, &schema, t).await, "missing table {t}");
         }
-        for f in ["enqueue_workflow", "notifications_function", "streams_function"] {
-            assert!(function_exists(&pool, &schema, f).await, "missing function {f}");
+        for f in [
+            "enqueue_workflow",
+            "notifications_function",
+            "streams_function",
+        ] {
+            assert!(
+                function_exists(&pool, &schema, f).await,
+                "missing function {f}"
+            );
         }
 
         drop_schema(&pool, &schema).await;
@@ -465,26 +635,24 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let valid_before: bool = sqlx::query_scalar(
-            "SELECT indisvalid FROM pg_index WHERE indexrelid = $1::regclass",
-        )
-        .bind(&idx)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let valid_before: bool =
+            sqlx::query_scalar("SELECT indisvalid FROM pg_index WHERE indexrelid = $1::regclass")
+                .bind(&idx)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(!valid_before, "index should be invalid after forging");
 
         // Rewind to before the migration that builds it (v32) and re-run.
         set_version(&pool, &schema, 31).await;
         run_migrations(&pool, &schema).await.unwrap();
 
-        let valid_after: bool = sqlx::query_scalar(
-            "SELECT indisvalid FROM pg_index WHERE indexrelid = $1::regclass",
-        )
-        .bind(&idx)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let valid_after: bool =
+            sqlx::query_scalar("SELECT indisvalid FROM pg_index WHERE indexrelid = $1::regclass")
+                .bind(&idx)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(valid_after, "cleanup should have dropped+rebuilt the index");
         assert_eq!(read_version(&pool, &schema).await.unwrap(), 40);
         drop_schema(&pool, &schema).await;
@@ -507,6 +675,9 @@ mod tests {
         assert_eq!(m.last().unwrap().version, SCHEMA_VERSION);
         // Online set per the reference.
         let online: Vec<i64> = m.iter().filter(|x| x.online).map(|x| x.version).collect();
-        assert_eq!(online, vec![22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37]);
+        assert_eq!(
+            online,
+            vec![22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 35, 37]
+        );
     }
 }

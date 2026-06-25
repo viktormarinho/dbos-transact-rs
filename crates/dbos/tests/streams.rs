@@ -138,9 +138,6 @@ async fn writing_to_closed_stream_errors() {
         .await
         .unwrap();
     let err = h.get_result().await.unwrap_err();
-    assert!(
-        err.to_string().contains("already closed"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("already closed"), "got: {err}");
     dbos.shutdown(Duration::from_secs(2)).await;
 }

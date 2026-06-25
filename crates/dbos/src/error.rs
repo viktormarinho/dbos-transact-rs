@@ -268,7 +268,9 @@ impl DbosError {
         let id = workflow_id.into();
         let mut e = Self::new(
             DbosErrorCode::WorkflowUnexpectedType,
-            format!("Workflow {id} returned unexpected result type: expected {expected}, got {actual}"),
+            format!(
+                "Workflow {id} returned unexpected result type: expected {expected}, got {actual}"
+            ),
         );
         e.ctx().workflow_id = Some(id);
         e

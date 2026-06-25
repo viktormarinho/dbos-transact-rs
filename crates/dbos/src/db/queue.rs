@@ -28,7 +28,11 @@ pub async fn transition_delayed_workflows(pool: &PgPool, schema: &str) -> Result
 
 /// On recovery, push a queued workflow that was claimed (`PENDING`) but never finished back to
 /// `ENQUEUED` so a runner reclaims it. Returns true if a row was reset.
-pub async fn clear_queue_assignment(pool: &PgPool, schema: &str, workflow_id: &str) -> Result<bool> {
+pub async fn clear_queue_assignment(
+    pool: &PgPool,
+    schema: &str,
+    workflow_id: &str,
+) -> Result<bool> {
     let prefix = schema_prefix(schema);
     let affected = sqlx::query(&format!(
         "UPDATE {prefix}workflow_status

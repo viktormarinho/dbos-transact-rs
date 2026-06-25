@@ -67,7 +67,11 @@ pub(crate) async fn run_listener(inner: Arc<DbosInner>, token: CancellationToken
             }
         };
         if let Err(e) = listener
-            .listen_all([NOTIFICATIONS_CHANNEL, WORKFLOW_EVENTS_CHANNEL, STREAMS_CHANNEL])
+            .listen_all([
+                NOTIFICATIONS_CHANNEL,
+                WORKFLOW_EVENTS_CHANNEL,
+                STREAMS_CHANNEL,
+            ])
             .await
         {
             tracing::warn!(error = %e, "LISTEN failed; retrying");

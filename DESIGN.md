@@ -585,3 +585,68 @@ the same name conflict at registration."
 The canonical durability test pattern (repeated ~20×): run to completion → `set_workflow_status_pending(id)`
 → `recover_pending_workflows([executor])` → assert identical result, identical recorded step count
 (steps replayed, not re-executed), and `recovery_attempts` bumped by 1.
+
+---
+
+## 14. Cross-SDK compatibility (shared system database)
+
+This port is **wire-compatible with the official SDKs on a shared Postgres system database** at the
+schema/metadata level (same table and column names). The boundaries below are proven by tests
+(`tests/cross_sdk_serialization.rs`, `tests/cross_sdk_interop.rs`) or documented as unsupported.
+
+### Proven compatible
+- **Reading TS-written values.** The `js_superjson` reader decodes real `@dbos-inc/dbos-sdk` 4.21.x
+  bytes — both the modern SuperJSON envelope (`{json, meta, __dbos_serializer:"superjson"}`) and the
+  legacy `DBOSJSON` format (`{dbos_type:"dbos_Date"|"dbos_BigInt"}` wrappers). Fixtures are generated
+  by `tests/fixtures/gen_ts_fixtures.mjs` using the same `superjson` library and committed as static
+  dumps (regenerable on SDK bumps), so CI needs no Node.
+- **Rust → TS values.** This crate writes `portable_json` (plain compact JSON) by default, which is
+  exactly what TS's `DBOSPortableJSON.parse` (a `JSON.parse`) reads. No conversion needed.
+- **Reading Go-written values.** Go's `DBOS_JSON` (base64 JSON) is read directly; Rust can also write
+  it for Go interop.
+- **Migration-version coordination.** A database migrated by the TS SDK ends at TS's positional
+  version (**63** at 4.21.6); this crate ends at its numbered `SCHEMA_VERSION` (**40**). Because the
+  runner only applies migrations with `version > current`, pointing this crate at a TS-migrated DB
+  runs **no** migrations (`should_migrate → false`) and leaves the TS version untouched — verified
+  against a version-63 schema. (Schema *equivalence* between the two — including the `attributes`
+  column, identical DDL at 4.21.6 — is taken as a premise; the test exercises the coordination code
+  path, not byte-equal schema diffing.)
+
+### Lossy (documented lowerings when reading foreign rows)
+Rich JS types have no exact Rust/JSON equivalent and are lowered when read: **Date → ISO-8601
+string**, **BigInt → JSON number** (values beyond `i64` are out of range), **Map → object**
+(string keys), **Set → array**, **`undefined` → `null`**. Round-tripping such a value back to TS
+yields the lowered form, not the original JS type.
+
+### Fallback for `serialization = NULL` rows
+Older rows (pre the `serialization` column) and some cross-SDK rows have `serialization = NULL`. The
+origin SDK is then unknown, so decoding is **best-effort**: SuperJSON / plain JSON / legacy DBOSJSON
+is tried first, then Go base64 `DBOS_JSON`. This deliberately does **not** assume base64 (a TS-origin
+NULL row is plain JSON; base64-decoding it would corrupt data — a fixed latent bug). A TS-native
+*input* stored under `NULL` as a bare positional-args array is the one shape that still needs an
+explicit `js_superjson`/portable hint to unwrap; document it if you mix SDKs on inputs.
+
+### Explicitly unsupported
+- **Python `py_pickle`.** Python's default serializer is base64-pickle, which is not portable to
+  Rust. Re-serialize such rows to `portable_json` on the Python side before a Rust app reads them.
+- **Running the TS migrator *after* this crate migrated to version 40 (reverse direction).** The two
+  schemes' version integers do **not** correspond (Rust's `40` ≠ TS's `40`th migration). A TS
+  migrator seeing `dbos_migrations.version = 40` would replay its entries `41..63`, which are
+  different operations than this crate ran, relying on TS swallowing `already exists` errors. Treat
+  this ordering as unsupported: pick **one** SDK to own migrations, or start the database fresh with
+  the SDK that will migrate it. The safe direction (TS migrates → Rust reads/operates without
+  migrating) is supported.
+
+### Recovery contract (executor identity & application version)
+Crash recovery is gated by `status = PENDING AND executor_id = ANY(<set>) AND application_version =
+<current>`. Consequences, all tested:
+- A PENDING workflow at a **different `application_version`** is **not** recovered.
+- A workflow owned by a **different `executor_id`** is **not** recovered unless that id is in the
+  recovery set.
+- A Rust executor **can adopt** a workflow orphaned by a TS/Go executor on the shared DB via
+  `Dbos::recover_workflows([foreign_executor_id])`, **provided the `application_version` matches**.
+
+**Therefore mutual TS↔Rust recovery is not automatic** — it requires coordinating `executor_id`
+(supplying the foreign id to the recovery call) **and** `application_version` (the orphaned workflow's
+version must equal the recovering executor's). This is by design: it prevents an executor running
+code at version X from resuming a workflow checkpointed by incompatible code at version Y.

@@ -181,6 +181,13 @@ impl Dbos {
         recover_pending_workflows(self.inner.clone(), &[executor]).await
     }
 
+    /// Re-run `PENDING` workflows owned by any of `executor_ids` (at this app version). Use this to
+    /// adopt workflows orphaned by another executor — including a TS/Go executor on a shared
+    /// database, when its `executor_id` is supplied and the `application_version` matches.
+    pub async fn recover_workflows(&self, executor_ids: &[String]) -> Result<Vec<String>> {
+        recover_pending_workflows(self.inner.clone(), executor_ids).await
+    }
+
     // ---- Workflow management ----------------------------------------------------------------
 
     /// List workflows matching `filter`.

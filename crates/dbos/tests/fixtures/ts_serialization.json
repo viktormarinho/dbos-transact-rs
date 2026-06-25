@@ -1,0 +1,17 @@
+{
+  "sj_int": "{\"json\":42,\"__dbos_serializer\":\"superjson\"}",
+  "sj_string": "{\"json\":\"hello\",\"__dbos_serializer\":\"superjson\"}",
+  "sj_bool": "{\"json\":true,\"__dbos_serializer\":\"superjson\"}",
+  "sj_null": "{\"json\":null,\"__dbos_serializer\":\"superjson\"}",
+  "sj_array": "{\"json\":[1,2,3],\"__dbos_serializer\":\"superjson\"}",
+  "sj_object": "{\"json\":{\"a\":1,\"b\":{\"c\":\"x\"},\"d\":[true,null]},\"__dbos_serializer\":\"superjson\"}",
+  "sj_date": "{\"json\":\"2024-01-02T03:04:05.000Z\",\"meta\":{\"values\":[\"Date\"],\"v\":1},\"__dbos_serializer\":\"superjson\"}",
+  "sj_bigint": "{\"json\":\"9007199254740993\",\"meta\":{\"values\":[\"bigint\"],\"v\":1},\"__dbos_serializer\":\"superjson\"}",
+  "sj_map": "{\"json\":[[\"a\",1],[\"b\",2]],\"meta\":{\"values\":[\"map\"],\"v\":1},\"__dbos_serializer\":\"superjson\"}",
+  "sj_set": "{\"json\":[1,2,3],\"meta\":{\"values\":[\"set\"],\"v\":1},\"__dbos_serializer\":\"superjson\"}",
+  "sj_object_with_date": "{\"json\":{\"when\":\"2024-01-02T03:04:05.000Z\",\"n\":5},\"meta\":{\"values\":{\"when\":[\"Date\"]},\"v\":1},\"__dbos_serializer\":\"superjson\"}",
+  "sj_undefined_field": "{\"json\":{\"a\":1,\"b\":null},\"meta\":{\"values\":{\"b\":[\"undefined\"]},\"v\":1},\"__dbos_serializer\":\"superjson\"}",
+  "legacy_int": "42",
+  "legacy_object_with_date": "{\"when\":{\"dbos_type\":\"dbos_Date\",\"dbos_data\":\"2024-01-02T03:04:05.000Z\"}}",
+  "legacy_object_with_bigint": "{\"big\":{\"dbos_type\":\"dbos_BigInt\",\"dbos_data\":\"123456789012345\"}}"
+}

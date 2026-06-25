@@ -90,39 +90,50 @@ fn encode_json_value(v: &Value, fmt: Format) -> String {
 }
 
 /// Decode a stored value, dispatching on the recorded `serialization` format name. A `None` format
-/// (legacy/unset) is treated as `DBOS_JSON`, matching the Go SDK's decode default.
+/// (a `serialization = NULL` row, e.g. legacy or cross-SDK) is decoded **best-effort** rather than
+/// assumed to be Go's base64 `DBOS_JSON`: a TS-origin NULL row holds plain JSON / SuperJSON, and
+/// base64-decoding that would corrupt the data.
 pub fn decode_value<T: DeserializeOwned>(data: Option<&str>, format: Option<&str>) -> Result<T> {
     let json = decode_to_json(data, format)?;
     Ok(serde_json::from_value(json)?)
 }
 
+fn decode_base64_json(s: &str) -> Result<Value> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let bytes = STANDARD.decode(s)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 fn decode_to_json(data: Option<&str>, format: Option<&str>) -> Result<Value> {
-    let fmt_name = format.unwrap_or(DBOS_JSON_NAME);
-    match fmt_name {
-        PORTABLE_NAME => match data {
-            None => Ok(Value::Null),
-            Some("null") => Ok(Value::Null),
+    match format {
+        Some(PORTABLE_NAME) => match data {
+            None | Some("null") => Ok(Value::Null),
             Some(s) => Ok(serde_json::from_str(s)?),
         },
-        DBOS_JSON_NAME | "" => match data {
+        Some(DBOS_JSON_NAME) | Some("") => match data {
             None => Ok(Value::Null),
             Some(s) if s == NIL_MARKER => Ok(Value::Null),
-            Some(s) => {
-                use base64::{engine::general_purpose::STANDARD, Engine as _};
-                let bytes = STANDARD.decode(s)?;
-                Ok(serde_json::from_slice(&bytes)?)
-            }
+            Some(s) => decode_base64_json(s),
         },
-        SUPERJSON_NAME => match data {
+        Some(SUPERJSON_NAME) => match data {
             None => Ok(Value::Null),
             Some(s) => decode_superjson(s),
         },
-        PY_PICKLE_NAME => Err(DbosError::other(
+        Some(PY_PICKLE_NAME) => Err(DbosError::other(
             "py_pickle is not portable; re-serialize such rows to portable_json on the Python side",
         )),
-        other => Err(DbosError::other(format!(
+        Some(other) => Err(DbosError::other(format!(
             "unknown serialization format {other:?}"
         ))),
+        // No recorded format: the origin SDK is unknown. Decode best-effort, covering
+        // Rust/TS (plain JSON, SuperJSON, legacy DBOSJSON wrappers) AND Go (base64 DBOS_JSON).
+        // SuperJSON/plain JSON is tried first; base64 strings are not valid JSON, so they fall
+        // through to the base64 branch, while a TS plain-JSON row is decoded correctly.
+        None => match data {
+            None | Some("null") => Ok(Value::Null),
+            Some(s) if s == NIL_MARKER => Ok(Value::Null),
+            Some(s) => decode_superjson(s).or_else(|_| decode_base64_json(s)),
+        },
     }
 }
 
@@ -502,10 +513,40 @@ mod tests {
 
     #[test]
     fn legacy_unset_format_decodes_as_dbos_json() {
+        // A Go-origin `serialization = NULL` row (base64 DBOS_JSON) still decodes via the fallback.
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let stored = STANDARD.encode(b"123");
         let decoded: i32 = decode_value(Some(&stored), None).unwrap();
         assert_eq!(decoded, 123);
+    }
+
+    #[test]
+    fn null_serialization_decodes_ts_origin_rows_not_as_base64() {
+        // The corruption trap: a TS-origin `serialization = NULL` row holds plain JSON / SuperJSON,
+        // and must NOT be base64-decoded.
+        let n: i64 = decode_value(Some("42"), None).unwrap();
+        assert_eq!(n, 42);
+        let s: String = decode_value(Some("\"hello\""), None).unwrap();
+        assert_eq!(s, "hello");
+
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct V {
+            a: i64,
+            b: String,
+        }
+        let obj: V = decode_value(Some(r#"{"a":1,"b":"x"}"#), None).unwrap();
+        assert_eq!(obj, V { a: 1, b: "x".to_string() });
+
+        // Legacy DBOSJSON wrappers (Date/BigInt) under NULL serialization are revived too.
+        let big: i64 =
+            decode_value(Some(r#"{"dbos_type":"dbos_BigInt","dbos_data":"123"}"#), None).unwrap();
+        assert_eq!(big, 123);
+
+        // And a Go base64 row under NULL still decodes (the fallback covers both origins).
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let go = STANDARD.encode(br#"{"k":99}"#);
+        let map: BTreeMap<String, i64> = decode_value(Some(&go), None).unwrap();
+        assert_eq!(map.get("k"), Some(&99));
     }
 
     #[test]

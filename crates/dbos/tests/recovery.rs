@@ -179,13 +179,14 @@ async fn dead_letter_queue_after_max_retries() {
     .await
     .unwrap();
 
-    // Forge a PENDING row whose recovery_attempts already sit at the limit (max_retries + 1).
+    // Forge a PENDING row whose recovery_attempts already sit at the limit (max_retries + 1), with
+    // a deduplication_id and started_at set so we can verify the DLQ transition clears them.
     let dlq_id = "dlq-target";
     sqlx::query(&format!(
         "INSERT INTO \"{schema}\".workflow_status
             (workflow_uuid, status, name, executor_id, application_version, recovery_attempts,
-             serialization, inputs)
-         VALUES ($1, 'PENDING', 'dlq_wf', $2, $3, 3, 'portable_json', 'null')"
+             serialization, inputs, deduplication_id, started_at_epoch_ms)
+         VALUES ($1, 'PENDING', 'dlq_wf', $2, $3, 3, 'portable_json', 'null', 'dedup-x', 999)"
     ))
     .bind(dlq_id)
     .bind(&executor)
@@ -201,6 +202,20 @@ async fn dead_letter_queue_after_max_retries() {
         workflow_status(&schema, dlq_id).await,
         "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
     );
+    // The DLQ transition clears deduplication_id / started_at / queue_name.
+    let (dedup, started, queue): (Option<String>, Option<i64>, Option<String>) =
+        sqlx::query_as(&format!(
+            "SELECT deduplication_id, started_at_epoch_ms, queue_name
+             FROM \"{schema}\".workflow_status WHERE workflow_uuid = $1"
+        ))
+        .bind(dlq_id)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(dedup, None, "deduplication_id cleared");
+    assert_eq!(started, None, "started_at cleared");
+    assert_eq!(queue, None, "queue_name cleared");
+
     let err = dbos
         .retrieve_workflow::<String>(dlq_id)
         .get_result()
@@ -211,5 +226,78 @@ async fn dead_letter_queue_after_max_retries() {
         DbosErrorCode::DeadLetterQueue as i32,
         "got: {err}"
     );
+    dbos.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn recovery_runs_workflow_with_no_recorded_steps() {
+    // Crash boundary (a): a kill after insert_workflow_status but before the first step. On
+    // recovery the workflow runs from scratch and its step executes exactly once.
+    let schema = unique_schema("rec_insert");
+    let step_runs = Arc::new(AtomicU64::new(0));
+    let sr = step_runs.clone();
+    let dbos = launch(&schema, move |b| {
+        b.register_workflow("w", move |ctx: WorkflowContext, _: ()| {
+            let sr = sr.clone();
+            async move {
+                ctx.run_step("s", move |_| {
+                    let sr = sr.clone();
+                    async move {
+                        sr.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, DbosError>(7i64)
+                    }
+                })
+                .await
+            }
+        })
+    })
+    .await;
+
+    // Learn this executor's id + application version.
+    let warm = dbos.run_workflow::<_, i64>("w", (), WorkflowOptions::default()).await.unwrap();
+    assert_eq!(warm.get_result().await.unwrap(), 7);
+    let (executor, appver): (String, String) = sqlx::query_as(&format!(
+        "SELECT executor_id, application_version FROM \"{schema}\".workflow_status WHERE workflow_uuid = $1"
+    ))
+    .bind(warm.workflow_id())
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(step_runs.load(Ordering::SeqCst), 1, "warm run executed its step once");
+
+    // Forge a PENDING row with NO operation_outputs (crashed right after the insert).
+    let crashed = "crashed-pre-step";
+    sqlx::query(&format!(
+        "INSERT INTO \"{schema}\".workflow_status
+            (workflow_uuid, status, name, executor_id, application_version, recovery_attempts,
+             serialization, inputs)
+         VALUES ($1, 'PENDING', 'w', $2, $3, 1, 'portable_json',
+                 '{{\"positionalArgs\":[null],\"namedArgs\":{{}}}}')"
+    ))
+    .bind(crashed)
+    .bind(&executor)
+    .bind(&appver)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    dbos.recover_pending_workflows().await.unwrap();
+    assert_eq!(
+        dbos.retrieve_workflow::<i64>(crashed).get_result().await.unwrap(),
+        7
+    );
+    assert_eq!(step_runs.load(Ordering::SeqCst), 2, "the recovered workflow executed its step once");
+    assert_eq!(recovery_attempts(&schema, crashed).await, 2);
+
+    // Exactly one step recorded for the recovered workflow.
+    let steps: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM \"{schema}\".operation_outputs WHERE workflow_uuid = $1"
+    ))
+    .bind(crashed)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(steps, 1);
+
     dbos.shutdown(Duration::from_secs(2)).await;
 }
